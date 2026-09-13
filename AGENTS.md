@@ -5,3 +5,5 @@ Learning project to explore single leader file replication based on Merkle trees
 Read the (root project!) README file.
 
 This is a learning project for exploring the technologies used here, just so you know.
+
+If you happen to change something in the codebase which leads to information in [this file](./AGENTS.md) to become stale, update [it](./AGENTS.md).
