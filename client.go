@@ -97,6 +97,7 @@ func BuildNodeHierarchy(path string, exclude [](*regexp.Regexp)) (*FileNode, err
 			}
 
 			hash := sha256.New()
+			hash.Write([]byte{byte(RegularNode)})
 			hash.Write(content)
 
 			children = append(children, &FileNode{name: filename, mode: RegularNode, content: content, hash: hash.Sum(nil)})
@@ -104,8 +105,13 @@ func BuildNodeHierarchy(path string, exclude [](*regexp.Regexp)) (*FileNode, err
 	}
 
 	hash := sha256.New()
+	hash.Write([]byte{byte(DirectoryNode)})
+
 	for _, c := range children {
-		hash.Write([]byte(c.hash))
+		hash.Write([]byte{byte(c.mode)})
+		hash.Write([]byte(c.name))
+		hash.Write([]byte{0})
+		hash.Write(c.hash)
 	}
 
 	root := &FileNode{name: filepath.Base(path), mode: DirectoryNode, hash: hash.Sum(nil), children: children}
