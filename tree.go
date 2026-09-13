@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/sha256"
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -52,8 +51,6 @@ func (n *FileNode) String() string {
 
 	return strings.Join(names, "\n")
 }
-
-var ignorePatternStrings = []string{}
 
 func BuildNodeHierarchy(path string, exclude [](*regexp.Regexp)) (*FileNode, error) {
 	entries, err := os.ReadDir(path)
@@ -117,20 +114,4 @@ func BuildNodeHierarchy(path string, exclude [](*regexp.Regexp)) (*FileNode, err
 	root := &FileNode{name: filepath.Base(path), mode: DirectoryNode, hash: hash.Sum(nil), children: children}
 
 	return root, nil
-}
-
-func main() {
-	var ignorePatterns [](*regexp.Regexp)
-
-	for _, s := range ignorePatternStrings {
-		ignorePatterns = append(ignorePatterns, regexp.MustCompile(s))
-	}
-
-	root, err := BuildNodeHierarchy(filepath.Dir("."), ignorePatterns)
-	if err != nil {
-		fmt.Println("Error: ", err)
-		return
-	}
-
-	fmt.Println(root.String())
 }
