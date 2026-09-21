@@ -15,11 +15,11 @@ func main() {
 		ignorePatterns = append(ignorePatterns, regexp.MustCompile(s))
 	}
 
-	root, err := BuildNodeHierarchy(filepath.Dir("."), ignorePatterns)
+	snapshot, err := BuildDirectorySnapshot(filepath.Dir("."), ignorePatterns)
 	if err != nil {
 		fmt.Println("Error: ", err)
 		return
 	}
 
-	fmt.Println(root.String())
+	fmt.Println(snapshot.root.String())
 }

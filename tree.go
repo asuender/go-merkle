@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,11 +16,15 @@ const (
 	RegularNode
 )
 
+type Snapshot struct {
+	root  *FileNode
+	blobs map[[32]byte][]byte
+}
+
 type FileNode struct {
 	name     string
 	mode     FileNodeType
-	content  []byte
-	hash     []byte
+	hash     [32]byte
 	children [](*FileNode)
 }
 
@@ -52,13 +57,14 @@ func (n *FileNode) String() string {
 	return strings.Join(names, "\n")
 }
 
-func BuildNodeHierarchy(path string, exclude [](*regexp.Regexp)) (*FileNode, error) {
+func BuildDirectorySnapshot(path string, exclude [](*regexp.Regexp)) (*Snapshot, error) {
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return nil, err
 	}
 
 	children := [](*FileNode){}
+	blobs := make(map[[32]byte][]byte)
 
 	for _, entry := range entries {
 		filename := entry.Name()
@@ -80,12 +86,13 @@ func BuildNodeHierarchy(path string, exclude [](*regexp.Regexp)) (*FileNode, err
 
 		switch {
 		case filetype.IsDir():
-			node, err := BuildNodeHierarchy(relPath, exclude)
+			nested, err := BuildDirectorySnapshot(relPath, exclude)
 			if err != nil {
 				return nil, err
 			}
 
-			children = append(children, node)
+			children = append(children, nested.root)
+			maps.Copy(blobs, nested.blobs)
 
 		case filetype.IsRegular():
 			content, err := os.ReadFile(relPath)
@@ -93,25 +100,33 @@ func BuildNodeHierarchy(path string, exclude [](*regexp.Regexp)) (*FileNode, err
 				return nil, err
 			}
 
-			hash := sha256.New()
-			hash.Write([]byte{byte(RegularNode)})
-			hash.Write(content)
+			h := sha256.New()
+			h.Write([]byte{byte(RegularNode)})
+			h.Write(content)
 
-			children = append(children, &FileNode{name: filename, mode: RegularNode, content: content, hash: hash.Sum(nil)})
+			var hash [32]byte
+			copy(hash[:], h.Sum(nil))
+
+			children = append(children, &FileNode{name: filename, mode: RegularNode, hash: hash})
+			blobs[hash] = content
 		}
 	}
 
-	hash := sha256.New()
-	hash.Write([]byte{byte(DirectoryNode)})
+	h := sha256.New()
+	h.Write([]byte{byte(DirectoryNode)})
 
 	for _, c := range children {
-		hash.Write([]byte{byte(c.mode)})
-		hash.Write([]byte(c.name))
-		hash.Write([]byte{0})
-		hash.Write(c.hash)
+		h.Write([]byte{byte(c.mode)})
+		h.Write([]byte(c.name))
+		h.Write([]byte{0})
+		h.Write(c.hash[:])
 	}
 
-	root := &FileNode{name: filepath.Base(path), mode: DirectoryNode, hash: hash.Sum(nil), children: children}
+	var hash [32]byte
+	copy(hash[:], h.Sum(nil))
 
-	return root, nil
+	root := &FileNode{name: filepath.Base(path), mode: DirectoryNode, hash: hash, children: children}
+	snapshot := &Snapshot{root: root, blobs: blobs}
+
+	return snapshot, nil
 }
