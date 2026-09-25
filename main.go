@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"path/filepath"
+	"os"
 	"regexp"
 )
 
@@ -15,7 +15,7 @@ func main() {
 		ignorePatterns = append(ignorePatterns, regexp.MustCompile(s))
 	}
 
-	snapshot, err := BuildDirectorySnapshot(filepath.Dir("."), ignorePatterns)
+	snapshot, err := BuildDirectorySnapshot(os.DirFS("."), ignorePatterns)
 	if err != nil {
 		fmt.Println("Error: ", err)
 		return

@@ -44,20 +44,20 @@ func dir(name string, children ...*FileNode) *FileNode {
 }
 
 func createAction(path string, mode FileNodeType, hash [32]byte) DiffAction {
-	return DiffAction{kind: "create", change: FileNodeChange{path: path, mode: mode, hash: hash}}
+	return DiffAction{kind: ActionKindCreate, change: FileNodeChange{path: path, mode: mode, hash: hash}}
 }
 
 func replaceAction(path string, hash [32]byte) DiffAction {
-	return DiffAction{kind: "replace", change: FileNodeChange{path: path, mode: RegularNode, hash: hash}}
+	return DiffAction{kind: ActionKindReplace, change: FileNodeChange{path: path, mode: RegularNode, hash: hash}}
 }
 
 func deleteAction(path string) DiffAction {
-	return DiffAction{kind: "delete", change: FileNodeChange{path: path}}
+	return DiffAction{kind: ActionKindDelete, change: FileNodeChange{path: path}}
 }
 
 func renameAction(from, path string, mode FileNodeType, hash [32]byte) DiffAction {
 	return DiffAction{
-		kind:   "rename",
+		kind:   ActionKindRename,
 		from:   from,
 		change: FileNodeChange{path: path, mode: mode, hash: hash},
 	}
@@ -222,7 +222,7 @@ func TestDiff(t *testing.T) {
 }
 
 type actionKey struct {
-	kind string
+	kind ActionKind
 	path string
 	mode FileNodeType
 	hash [32]byte
@@ -278,12 +278,12 @@ func diffOracle(local *FileNode, remote *FileNode) []actionKey {
 
 		switch {
 		case !found:
-			keys = append(keys, actionKey{kind: "create", path: path, mode: remoteNode.mode, hash: remoteNode.hash})
+			keys = append(keys, actionKey{kind: ActionKindCreate, path: path, mode: remoteNode.mode, hash: remoteNode.hash})
 		case localNode.mode != remoteNode.mode:
-			keys = append(keys, actionKey{kind: "delete", path: path})
-			keys = append(keys, actionKey{kind: "create", path: path, mode: remoteNode.mode, hash: remoteNode.hash})
+			keys = append(keys, actionKey{kind: ActionKindDelete, path: path})
+			keys = append(keys, actionKey{kind: ActionKindCreate, path: path, mode: remoteNode.mode, hash: remoteNode.hash})
 		case remoteNode.mode == RegularNode && localNode.hash != remoteNode.hash:
-			keys = append(keys, actionKey{kind: "replace", path: path, mode: RegularNode, hash: remoteNode.hash})
+			keys = append(keys, actionKey{kind: ActionKindReplace, path: path, mode: RegularNode, hash: remoteNode.hash})
 		}
 	}
 
@@ -291,7 +291,7 @@ func diffOracle(local *FileNode, remote *FileNode) []actionKey {
 		if seen[path] {
 			continue
 		}
-		keys = append(keys, actionKey{kind: "delete", path: path})
+		keys = append(keys, actionKey{kind: ActionKindDelete, path: path})
 	}
 
 	sortActionKeys(keys)

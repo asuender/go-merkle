@@ -1,41 +1,41 @@
 package main
 
 import (
-	"os"
+	"io/fs"
 	"path/filepath"
 	"regexp"
 	"testing"
+	"testing/fstest"
 
 	"github.com/google/go-cmp/cmp"
 )
 
 func TestSnapshotDiff(t *testing.T) {
-	localDir := t.TempDir()
-	remoteDir := t.TempDir()
-
-	for _, dir := range []string{localDir, remoteDir} {
-		writeFile(t, filepath.Join(dir, "a", "b.txt"), "one")
-		writeFile(t, filepath.Join(dir, "c.txt"), "same")
+	localFS := fstest.MapFS{
+		"a/b.txt": &fstest.MapFile{Data: []byte("one")},
+		"c.txt":   &fstest.MapFile{Data: []byte("same")},
+	}
+	remoteFS := fstest.MapFS{
+		"a/b.txt": &fstest.MapFile{Data: []byte("one")},
+		"c.txt":   &fstest.MapFile{Data: []byte("same")},
 	}
 
-	local := mustSnapshot(t, localDir, nil)
-	remote := mustSnapshot(t, remoteDir, nil)
+	local := mustSnapshot(t, localFS, nil)
+	remote := mustSnapshot(t, remoteFS, nil)
 	if diff := cmp.Diff([]DiffAction{}, local.root.Diff(remote.root), diffOpts...); diff != "" {
 		t.Fatalf("identical trees mismatch (-want +got):\n%s", diff)
 	}
 
-	writeFile(t, filepath.Join(remoteDir, "a", "b.txt"), "two")
-	remote = mustSnapshot(t, remoteDir, nil)
+	remoteFS["a/b.txt"].Data = []byte("two")
+	remote = mustSnapshot(t, remoteFS, nil)
 	replaced := child(t, remote.root, "a", "b.txt")
 	want := []DiffAction{replaceAction(filepath.Join("a", "b.txt"), replaced.hash)}
 	if diff := cmp.Diff(want, local.root.Diff(remote.root), diffOpts...); diff != "" {
 		t.Fatalf("content edit mismatch (-want +got):\n%s", diff)
 	}
 
-	if err := os.Remove(filepath.Join(remoteDir, "c.txt")); err != nil {
-		t.Fatal(err)
-	}
-	remote = mustSnapshot(t, remoteDir, nil)
+	delete(remoteFS, "c.txt")
+	remote = mustSnapshot(t, remoteFS, nil)
 	replaced = child(t, remote.root, "a", "b.txt")
 	want = []DiffAction{
 		replaceAction(filepath.Join("a", "b.txt"), replaced.hash),
@@ -45,11 +45,11 @@ func TestSnapshotDiff(t *testing.T) {
 		t.Fatalf("delete mismatch (-want +got):\n%s", diff)
 	}
 
-	writeFile(t, filepath.Join(remoteDir, "skip.tmp"), "ignored")
-	writeFile(t, filepath.Join(remoteDir, "extra.txt"), "added")
+	remoteFS["skip.tmp"] = &fstest.MapFile{Data: []byte("ignored")}
+	remoteFS["extra.txt"] = &fstest.MapFile{Data: []byte("added")}
 	exclude := []*regexp.Regexp{regexp.MustCompile(`\.tmp$`)}
-	local = mustSnapshot(t, localDir, exclude)
-	remote = mustSnapshot(t, remoteDir, exclude)
+	local = mustSnapshot(t, localFS, exclude)
+	remote = mustSnapshot(t, remoteFS, exclude)
 	added := child(t, remote.root, "extra.txt")
 	replaced = child(t, remote.root, "a", "b.txt")
 	want = []DiffAction{
@@ -62,23 +62,22 @@ func TestSnapshotDiff(t *testing.T) {
 	}
 }
 
-func mustSnapshot(t *testing.T, path string, exclude []*regexp.Regexp) *Snapshot {
-	t.Helper()
-	snapshot, err := BuildDirectorySnapshot(path, exclude)
-	if err != nil {
-		t.Fatalf("BuildDirectorySnapshot(%q): %v", path, err)
+func TestBuildDirectorySnapshotRejectsSymlink(t *testing.T) {
+	fsys := fstest.MapFS{
+		"link": &fstest.MapFile{Data: []byte("target"), Mode: fs.ModeSymlink},
 	}
-	return snapshot
+	if _, err := BuildDirectorySnapshot(fsys, nil); err == nil {
+		t.Fatal("expected error for symlink")
+	}
 }
 
-func writeFile(t *testing.T, path string, content string) {
+func mustSnapshot(t *testing.T, fsys fs.FS, exclude []*regexp.Regexp) *Snapshot {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
+	snapshot, err := BuildDirectorySnapshot(fsys, exclude)
+	if err != nil {
+		t.Fatalf("BuildDirectorySnapshot: %v", err)
 	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	return snapshot
 }
 
 func child(t *testing.T, node *FileNode, names ...string) *FileNode {
