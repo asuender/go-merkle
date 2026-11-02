@@ -1,24 +1,65 @@
 # go-merkle
 
-Single-leader file replication based on Merkle trees. Implemented in Go.
+>[!note]
+> This project is a **work in progress**. Expect capabilities explained below to either be not implemented or behave incorrectly.
 
-## Proposed implementation
+Single-leader file replication based on Merkle trees, implemented in Go.
+One leader serves the files in its working directory, and followers copy them into their own empty directories.
 
-I recently saw a video by Ben Dicken about [Merkle trees](https://www.youtube.com/watch?v=86Elcm_6X_Y) (great video btw!) and thought: hm, that's cool, let's build something around them! Eventually, I came up with the following:
+This is a learning project, inspired by Ben Dicken's [video on Merkle trees](https://www.youtube.com/watch?v=86Elcm_6X_Y).
 
-Imagine a network of multiple clients connected together, with the goal of replicating files stored in one of those clients, the leader. All the other nodes are followers that subscribe to any changes and sync them. Followers are meant to be started in empty directories (for now), whereas the leader picks up the files in the directory it's spawned in. Furthermore, client may live on the same machine or somewhere else.
+## Build
 
-I imagine a basic flow as follows:
+Requires Go 1.27.1 or later.
 
-1. Leader starts up
-2. Followers connect to the leader
-3. Followers individually ask for the initial tree
-4. Leader responds by sending the tree structure (without actual file contents)
-5. After receiving the tree, followers request individual file contents by their hash values
-6. Followers repeatedly poll the leader for updates
-7. If any updates occur, followers performs a diff / merge algorithm to determine which contents have to be (re-)fetched
-8. Followers then request updated file contents from the leader
+```sh
+go build
+go test ./...
+```
+
+## Usage
+
+```sh
+# In the directory to replicate:
+go-merkle lead --port 8000
+
+# In an empty directory, on the same machine or another one:
+go-merkle follow --host 127.0.0.1 --port 8000
+```
+
+| Command  | Flag       | Default     | Description                                |
+| -------- | ---------- | ----------- | ------------------------------------------ |
+| `lead`   | `--port`   | `8000`      | Port to serve updates on                   |
+| `lead`   | `--ignore` | none        | Comma-separated regexes of names to ignore |
+| `follow` | `--host`   | `127.0.0.1` | Leader host                                |
+| `follow` | `--port`   | `8000`      | Leader port                                |
+
+`--ignore` is parsed but has no effect yet.
+
+## How it works
+
+The leader hashes its directory into a Merkle tree using SHA-256.
+A file's hash covers its contents, and a directory's hash covers the mode, name and hash of each child.
+A change to any file therefore changes the hash of every directory above it, up to the root.
+
+The planned replication flow is:
+
+1. A follower connects to the leader and requests the tree, which contains no file contents.
+2. The follower requests each file's contents by hash.
+3. The follower polls the leader for the current tree.
+4. If the root hash differs, the follower diffs the two trees and skips every subtree whose hash matches.
+5. The follower requests the contents it doesn't have, then applies the creates, replacements, renames and deletes.
+
+The tree will be sent as JSON with hex-encoded hashes, and file contents will be sent separately.
+
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full proposal, including consistency and path safety.
+
+## Limitations
+
+- Only regular files and directories are supported. Building a snapshot fails on anything else, including symlinks.
+- A snapshot holds the contents of every file in memory.
+- Followers must start in an empty directory.
 
 ## License
 
-[MIT](https://choosealicense.com/licenses/mit/)
+[MIT](./LICENSE)
