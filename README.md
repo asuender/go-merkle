@@ -52,8 +52,6 @@ The planned replication flow is:
 
 The tree will be sent as JSON with hex-encoded hashes, and file contents will be sent separately.
 
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full proposal, including consistency and path safety.
-
 ## Limitations
 
 - Only regular files and directories are supported. Building a snapshot fails on anything else, including symlinks.

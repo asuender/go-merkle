@@ -17,3 +17,7 @@ Commit to the `dev` branch. `dev` is squash-merged into `main` on GitHub on a re
 Follow the [Go doc comment style](https://go.dev/doc/comment).
 
 Comments explain *why* something exists: intent, constraints and non-obvious trade-offs. Don't restate what the code or signature already says. Some existing comments in the codebase do this, so don't use them as a model.
+
+## Other
+
+- [`ARCHITECTURE.md`](./ARCHITECTURE.md) is an old file describing the intended behavior of the tool. Keep it untracked and do not reference it somewhere. Actual implementation will likely drift, but that's okay.
