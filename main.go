@@ -1,3 +1,6 @@
+// Go-merkle replicates files from a single leader to its followers
+// using Merkle trees.
+
 package main
 
 import (
@@ -29,7 +32,7 @@ Examples:
   go-merkle follow --host 127.0.0.1 --port 8000`
 
 // parseIgnorePatterns extracts multiple comma-separated
-// ignore (regex) patterns from s
+// ignore (regex) patterns from s.
 func parseIgnorePatterns(s string) ([](*regexp.Regexp), error) {
 	patterns := [](*regexp.Regexp){}
 
@@ -46,7 +49,7 @@ func parseIgnorePatterns(s string) ([](*regexp.Regexp), error) {
 }
 
 // RunLeader runs the tool in leader mode in the root directory
-// of fs, ignoring the files specified by ignorePatterns and serving
+// of fsys, ignoring the files specified by ignorePatterns and serving
 // the Merkle trees via port.
 func RunLeader(fsys fs.FS, logger *log.Logger, port int, ignorePatterns [](*regexp.Regexp)) error {
 	_, err := BuildDirectorySnapshot(os.DirFS("."), ignorePatterns)

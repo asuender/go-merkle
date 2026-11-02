@@ -23,7 +23,7 @@ func file(name string, tag byte) *FileNode {
 	var hash [32]byte
 	copy(hash[:], h.Sum(nil))
 
-	return &FileNode{name: name, mode: RegularNode, hash: hash}
+	return &FileNode{Name: name, Mode: RegularNode, Hash: hash}
 }
 
 func dir(name string, children ...*FileNode) *FileNode {
@@ -31,35 +31,35 @@ func dir(name string, children ...*FileNode) *FileNode {
 	h.Write([]byte{byte(DirectoryNode)})
 
 	for _, c := range children {
-		h.Write([]byte{byte(c.mode)})
-		h.Write([]byte(c.name))
+		h.Write([]byte{byte(c.Mode)})
+		h.Write([]byte(c.Name))
 		h.Write([]byte{0})
-		h.Write(c.hash[:])
+		h.Write(c.Hash[:])
 	}
 
 	var hash [32]byte
 	copy(hash[:], h.Sum(nil))
 
-	return &FileNode{name: name, mode: DirectoryNode, hash: hash, children: children}
+	return &FileNode{Name: name, Mode: DirectoryNode, Hash: hash, Children: children}
 }
 
 func createAction(path string, mode FileNodeType, hash [32]byte) DiffAction {
-	return DiffAction{kind: ActionKindCreate, change: FileNodeChange{path: path, mode: mode, hash: hash}}
+	return DiffAction{Kind: ActionKindCreate, Change: FileNodeChange{Path: path, Mode: mode, Hash: hash}}
 }
 
 func replaceAction(path string, hash [32]byte) DiffAction {
-	return DiffAction{kind: ActionKindReplace, change: FileNodeChange{path: path, mode: RegularNode, hash: hash}}
+	return DiffAction{Kind: ActionKindReplace, Change: FileNodeChange{Path: path, Mode: RegularNode, Hash: hash}}
 }
 
 func deleteAction(path string) DiffAction {
-	return DiffAction{kind: ActionKindDelete, change: FileNodeChange{path: path}}
+	return DiffAction{Kind: ActionKindDelete, Change: FileNodeChange{Path: path}}
 }
 
 func renameAction(from, path string, mode FileNodeType, hash [32]byte) DiffAction {
 	return DiffAction{
-		kind:   ActionKindRename,
-		from:   from,
-		change: FileNodeChange{path: path, mode: mode, hash: hash},
+		Kind:   ActionKindRename,
+		From:   from,
+		Change: FileNodeChange{Path: path, Mode: mode, Hash: hash},
 	}
 }
 
@@ -75,7 +75,7 @@ func TestDiff(t *testing.T) {
 
 	equalHashLocal := dir("root", file("a", 1))
 	equalHashRemote := dir("root", file("b", 2))
-	equalHashRemote.hash = equalHashLocal.hash
+	equalHashRemote.Hash = equalHashLocal.Hash
 
 	cases := []struct {
 		name   string
@@ -97,13 +97,13 @@ func TestDiff(t *testing.T) {
 			name:   "replace file",
 			local:  dir("root", file("b", 1)),
 			remote: dir("root", file("b", 2)),
-			want:   []DiffAction{replaceAction("b", file("b", 2).hash)},
+			want:   []DiffAction{replaceAction("b", file("b", 2).Hash)},
 		},
 		{
 			name:   "add file",
 			local:  dir("root"),
 			remote: dir("root", file("b", 1)),
-			want:   []DiffAction{createAction("b", RegularNode, file("b", 1).hash)},
+			want:   []DiffAction{createAction("b", RegularNode, file("b", 1).Hash)},
 		},
 		{
 			name:   "remove file",
@@ -116,8 +116,8 @@ func TestDiff(t *testing.T) {
 			local:  dir("root"),
 			remote: dir("root", dir("d", nested)),
 			want: []DiffAction{
-				createAction("d", DirectoryNode, dir("d", nested).hash),
-				createAction(filepath.Join("d", "e"), RegularNode, nested.hash),
+				createAction("d", DirectoryNode, dir("d", nested).Hash),
+				createAction(filepath.Join("d", "e"), RegularNode, nested.Hash),
 			},
 		},
 		{
@@ -135,7 +135,7 @@ func TestDiff(t *testing.T) {
 			local:  dir("root", file("old", 1)),
 			remote: dir("root", file("new", 1)),
 			want: []DiffAction{
-				renameAction("old", "new", RegularNode, file("old", 1).hash),
+				renameAction("old", "new", RegularNode, file("old", 1).Hash),
 			},
 		},
 		{
@@ -143,7 +143,7 @@ func TestDiff(t *testing.T) {
 			local:  dir("root", dir("old", nested)),
 			remote: dir("root", dir("new", nested)),
 			want: []DiffAction{
-				renameAction("old", "new", DirectoryNode, dir("old", nested).hash),
+				renameAction("old", "new", DirectoryNode, dir("old", nested).Hash),
 			},
 		},
 		{
@@ -151,7 +151,7 @@ func TestDiff(t *testing.T) {
 			local:  dir("root", file("old", 1)),
 			remote: dir("root", file("old", 1), file("new", 1)),
 			want: []DiffAction{
-				createAction("new", RegularNode, file("new", 1).hash),
+				createAction("new", RegularNode, file("new", 1).Hash),
 			},
 		},
 		{
@@ -159,7 +159,7 @@ func TestDiff(t *testing.T) {
 			local:  dir("root", file("old", 1)),
 			remote: dir("root", file("new", 2)),
 			want: []DiffAction{
-				createAction("new", RegularNode, file("new", 2).hash),
+				createAction("new", RegularNode, file("new", 2).Hash),
 				deleteAction("old"),
 			},
 		},
@@ -169,8 +169,8 @@ func TestDiff(t *testing.T) {
 			remote: dir("root", dir("x", file("y", 2))),
 			want: []DiffAction{
 				deleteAction("x"),
-				createAction("x", DirectoryNode, dir("x", file("y", 2)).hash),
-				createAction(filepath.Join("x", "y"), RegularNode, file("y", 2).hash),
+				createAction("x", DirectoryNode, dir("x", file("y", 2)).Hash),
+				createAction(filepath.Join("x", "y"), RegularNode, file("y", 2).Hash),
 			},
 		},
 		{
@@ -180,7 +180,7 @@ func TestDiff(t *testing.T) {
 			want: []DiffAction{
 				deleteAction(filepath.Join("x", "y")),
 				deleteAction("x"),
-				createAction("x", RegularNode, file("x", 2).hash),
+				createAction("x", RegularNode, file("x", 2).Hash),
 			},
 		},
 		{
@@ -198,8 +198,8 @@ func TestDiff(t *testing.T) {
 				added,
 			),
 			want: []DiffAction{
-				replaceAction("changed", changedRemote.hash),
-				createAction("new", RegularNode, added.hash),
+				replaceAction("changed", changedRemote.Hash),
+				createAction("new", RegularNode, added.Hash),
 				deleteAction("gone"),
 			},
 		},
@@ -207,7 +207,7 @@ func TestDiff(t *testing.T) {
 			name:   "untouched sibling",
 			local:  dir("root", file("a", 1), dir("b", file("c", 1))),
 			remote: dir("root", file("a", 2), dir("b", file("c", 1))),
-			want:   []DiffAction{replaceAction("a", file("a", 2).hash)},
+			want:   []DiffAction{replaceAction("a", file("a", 2).Hash)},
 		},
 	}
 
@@ -255,10 +255,10 @@ func summarize(actions []DiffAction) []actionKey {
 	keys := make([]actionKey, len(actions))
 	for i, action := range actions {
 		keys[i] = actionKey{
-			kind: action.kind,
-			path: action.change.path,
-			mode: action.change.mode,
-			hash: action.change.hash,
+			kind: action.Kind,
+			path: action.Change.Path,
+			mode: action.Change.Mode,
+			hash: action.Change.Hash,
 		}
 	}
 	sortActionKeys(keys)
@@ -278,12 +278,12 @@ func diffOracle(local *FileNode, remote *FileNode) []actionKey {
 
 		switch {
 		case !found:
-			keys = append(keys, actionKey{kind: ActionKindCreate, path: path, mode: remoteNode.mode, hash: remoteNode.hash})
-		case localNode.mode != remoteNode.mode:
+			keys = append(keys, actionKey{kind: ActionKindCreate, path: path, mode: remoteNode.Mode, hash: remoteNode.Hash})
+		case localNode.Mode != remoteNode.Mode:
 			keys = append(keys, actionKey{kind: ActionKindDelete, path: path})
-			keys = append(keys, actionKey{kind: ActionKindCreate, path: path, mode: remoteNode.mode, hash: remoteNode.hash})
-		case remoteNode.mode == RegularNode && localNode.hash != remoteNode.hash:
-			keys = append(keys, actionKey{kind: ActionKindReplace, path: path, mode: RegularNode, hash: remoteNode.hash})
+			keys = append(keys, actionKey{kind: ActionKindCreate, path: path, mode: remoteNode.Mode, hash: remoteNode.Hash})
+		case remoteNode.Mode == RegularNode && localNode.Hash != remoteNode.Hash:
+			keys = append(keys, actionKey{kind: ActionKindReplace, path: path, mode: RegularNode, hash: remoteNode.Hash})
 		}
 	}
 
@@ -302,8 +302,8 @@ func collect(root *FileNode) map[string]*FileNode {
 	nodes := make(map[string]*FileNode)
 	var walk func(*FileNode, string)
 	walk = func(node *FileNode, prefix string) {
-		for _, child := range node.children {
-			path := filepath.Join(prefix, child.name)
+		for _, child := range node.Children {
+			path := filepath.Join(prefix, child.Name)
 			nodes[path] = child
 			walk(child, path)
 		}

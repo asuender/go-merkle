@@ -29,7 +29,7 @@ func TestSnapshotDiff(t *testing.T) {
 	remoteFS["a/b.txt"].Data = []byte("two")
 	remote = mustSnapshot(t, remoteFS, nil)
 	replaced := child(t, remote.root, "a", "b.txt")
-	want := []DiffAction{replaceAction(filepath.Join("a", "b.txt"), replaced.hash)}
+	want := []DiffAction{replaceAction(filepath.Join("a", "b.txt"), replaced.Hash)}
 	if diff := cmp.Diff(want, local.root.Diff(remote.root), diffOpts...); diff != "" {
 		t.Fatalf("content edit mismatch (-want +got):\n%s", diff)
 	}
@@ -38,7 +38,7 @@ func TestSnapshotDiff(t *testing.T) {
 	remote = mustSnapshot(t, remoteFS, nil)
 	replaced = child(t, remote.root, "a", "b.txt")
 	want = []DiffAction{
-		replaceAction(filepath.Join("a", "b.txt"), replaced.hash),
+		replaceAction(filepath.Join("a", "b.txt"), replaced.Hash),
 		deleteAction("c.txt"),
 	}
 	if diff := cmp.Diff(want, local.root.Diff(remote.root), diffOpts...); diff != "" {
@@ -53,8 +53,8 @@ func TestSnapshotDiff(t *testing.T) {
 	added := child(t, remote.root, "extra.txt")
 	replaced = child(t, remote.root, "a", "b.txt")
 	want = []DiffAction{
-		replaceAction(filepath.Join("a", "b.txt"), replaced.hash),
-		createAction("extra.txt", RegularNode, added.hash),
+		replaceAction(filepath.Join("a", "b.txt"), replaced.Hash),
+		createAction("extra.txt", RegularNode, added.Hash),
 		deleteAction("c.txt"),
 	}
 	if diff := cmp.Diff(want, local.root.Diff(remote.root), diffOpts...); diff != "" {
@@ -84,8 +84,8 @@ func child(t *testing.T, node *FileNode, names ...string) *FileNode {
 	t.Helper()
 	for _, name := range names {
 		var next *FileNode
-		for _, c := range node.children {
-			if c.name == name {
+		for _, c := range node.Children {
+			if c.Name == name {
 				next = c
 				break
 			}
