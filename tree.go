@@ -236,6 +236,8 @@ func (n *FileNode) String() string {
 // while excluding files that match the patterns in exclude.
 // The root node is named ".".
 func BuildDirectorySnapshot(fsys fs.FS, exclude []*regexp.Regexp) (*Snapshot, error) {
+	// TODO: accept a context so that we can cancel tree growth
+	// safely with ctrl-c
 	return buildDir(fsys, ".", exclude)
 }
 
@@ -293,6 +295,7 @@ func buildDir(fsys fs.FS, dir string, exclude []*regexp.Regexp) (*Snapshot, erro
 			blobs[hash] = content
 
 		default:
+			// TODO: follow symlinks instead of failing them
 			return nil, fmt.Errorf("path %s is not regular file or directory", childPath)
 		}
 	}
