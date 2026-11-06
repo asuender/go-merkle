@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/hex"
+	"errors"
 	"io/fs"
 	"path/filepath"
 	"regexp"
@@ -133,6 +134,143 @@ func TestBuildDirectorySnapshotKeepsNestedSymlinkPointingUpInsideRoot(t *testing
 	}
 	if got := string(snapshot.blobs[link.Hash]); got != "../a.txt" {
 		t.Fatalf("symlink blob = %q, want %q", got, "../a.txt")
+	}
+}
+
+// failingFS fails accessing the paths in errs, while still listing them in
+// their parent directory. That way, it reproduces entries changing between
+// being listed and being read.
+//
+// It embeds [fs.FS] rather than [fstest.MapFS], so that only Open is promoted
+// and helpers like [fs.ReadFile] cannot bypass it. ReadLink and Lstat are
+// overridden explicitly to satisfy [fs.ReadLinkFS].
+type failingFS struct {
+	fs.FS
+	errs map[string]error
+}
+
+func (f failingFS) Open(name string) (fs.File, error) {
+	if err, ok := f.errs[name]; ok {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: err}
+	}
+	return f.FS.Open(name)
+}
+
+func (f failingFS) ReadLink(name string) (string, error) {
+	if err, ok := f.errs[name]; ok {
+		return "", &fs.PathError{Op: "readlink", Path: name, Err: err}
+	}
+	return fs.ReadLink(f.FS, name)
+}
+
+func (f failingFS) Lstat(name string) (fs.FileInfo, error) {
+	if err, ok := f.errs[name]; ok {
+		return nil, &fs.PathError{Op: "lstat", Path: name, Err: err}
+	}
+	return fs.Lstat(f.FS, name)
+}
+
+func TestBuildDirectorySnapshotSkipsVanishedEntries(t *testing.T) {
+	tests := []struct {
+		name     string
+		fsys     fstest.MapFS
+		vanished string
+	}{
+		{
+			name: "file",
+			fsys: fstest.MapFS{
+				"a.txt":    &fstest.MapFile{Data: []byte("content")},
+				"gone.txt": &fstest.MapFile{Data: []byte("deleted")},
+			},
+			vanished: "gone.txt",
+		},
+		{
+			name: "directory",
+			fsys: fstest.MapFS{
+				"a.txt":      &fstest.MapFile{Data: []byte("content")},
+				"gone/b.txt": &fstest.MapFile{Data: []byte("deleted")},
+			},
+			vanished: "gone",
+		},
+		{
+			name: "symlink",
+			fsys: fstest.MapFS{
+				"a.txt": &fstest.MapFile{Data: []byte("content")},
+				"link":  &fstest.MapFile{Data: []byte("a.txt"), Mode: fs.ModeSymlink},
+			},
+			vanished: "link",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			want := mustSnapshot(t, fstest.MapFS{"a.txt": tt.fsys["a.txt"]}, nil)
+
+			fsys := failingFS{FS: tt.fsys, errs: map[string]error{tt.vanished: fs.ErrNotExist}}
+			got := mustSnapshot(t, fsys, nil)
+
+			if got.root.Hash != want.root.Hash {
+				t.Fatalf("vanished %s %q still affects the snapshot:\n%s", tt.name, tt.vanished, got.root)
+			}
+		})
+	}
+}
+
+func TestBuildDirectorySnapshotFailsOnPermissionDenied(t *testing.T) {
+	tests := []struct {
+		name   string
+		secret *fstest.MapFile
+	}{
+		{name: "file", secret: &fstest.MapFile{Data: []byte("unreadable")}},
+		{name: "symlink", secret: &fstest.MapFile{Data: []byte("a.txt"), Mode: fs.ModeSymlink}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fsys := failingFS{
+				FS: fstest.MapFS{
+					"a.txt":  &fstest.MapFile{Data: []byte("content")},
+					"secret": tt.secret,
+				},
+				errs: map[string]error{"secret": fs.ErrPermission},
+			}
+
+			_, err := BuildDirectorySnapshot(fsys, nil)
+			if !errors.Is(err, fs.ErrPermission) {
+				t.Fatalf("got error %v, want it to wrap %v", err, fs.ErrPermission)
+			}
+		})
+	}
+}
+
+func TestBuildDirectorySnapshotSkipsUnsupportedFileTypes(t *testing.T) {
+	withoutSocket := fstest.MapFS{
+		"a.txt": &fstest.MapFile{Data: []byte("content")},
+	}
+	withSocket := fstest.MapFS{
+		"a.txt":    &fstest.MapFile{Data: []byte("content")},
+		"dev.sock": &fstest.MapFile{Mode: fs.ModeSocket},
+	}
+
+	want := mustSnapshot(t, withoutSocket, nil)
+	got := mustSnapshot(t, withSocket, nil)
+
+	if got.root.Hash != want.root.Hash {
+		t.Fatalf("root hash changed by socket:\n%s", got.root)
+	}
+}
+
+// A vanished root must not be mistaken for an empty directory, as that
+// snapshot would delete everything on the followers.
+func TestBuildDirectorySnapshotFailsOnVanishedRoot(t *testing.T) {
+	fsys := failingFS{
+		FS:   fstest.MapFS{"a.txt": &fstest.MapFile{Data: []byte("content")}},
+		errs: map[string]error{".": fs.ErrNotExist},
+	}
+
+	_, err := BuildDirectorySnapshot(fsys, nil)
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("got error %v, want it to wrap %v", err, fs.ErrNotExist)
 	}
 }
 

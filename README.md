@@ -62,7 +62,8 @@ The tree will be sent as JSON with hex-encoded hashes, and file contents will be
 
 ## Limitations
 
-- Only regular files, directories and symlinks are supported. Building a snapshot fails on anything else, such as devices or sockets.
+- Only regular files, directories and symlinks are replicated. Anything else, such as devices or sockets, is skipped.
+- Files deleted while a snapshot is being built are left out of it. Any other read error, such as a permission error, fails the rebuild, because leaving the file out would delete it on the followers. While such an error persists, the leader keeps serving its last snapshot until `--max-staleness` is exceeded.
 - Symlinks are replicated as links and never followed. Links with an absolute target or one pointing outside the replicated directory are skipped. A link to an ignored file is kept and will dangle on the follower.
 - A snapshot holds the contents of every file in memory.
 - Followers must start in an empty directory.

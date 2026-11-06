@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"maps"
@@ -243,6 +244,11 @@ func (n *FileNode) String() string {
 // since the follower's root lives elsewhere and they would point at something
 // unrelated there.
 //
+// Entries that vanish between being listed and being read are left out,
+// as are file types other than regular files, directories and symlinks.
+// Any other error, such as a permission error, fails the whole build, since
+// leaving an existing entry out would delete it on the followers.
+//
 // fsys must implement [fs.ReadLinkFS] if it contains symlinks.
 func BuildDirectorySnapshot(fsys fs.FS, exclude []*regexp.Regexp) (*Snapshot, error) {
 	return buildDir(fsys, ".", exclude)
@@ -279,6 +285,11 @@ func buildDir(fsys fs.FS, dir string, exclude []*regexp.Regexp) (*Snapshot, erro
 		case filetype.IsDir():
 			nested, err := buildDir(fsys, childPath, exclude)
 			if err != nil {
+				// If the nested subdirectory can't be read, [buildDir] immediately returns
+				// [fs.ErrNotExist], in which case we skip it as we do with other file types.
+				if errors.Is(err, fs.ErrNotExist) {
+					continue
+				}
 				return nil, err
 			}
 
@@ -288,6 +299,9 @@ func buildDir(fsys fs.FS, dir string, exclude []*regexp.Regexp) (*Snapshot, erro
 		case filetype.IsRegular():
 			content, err := fs.ReadFile(fsys, childPath)
 			if err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					continue
+				}
 				return nil, fmt.Errorf("read %s: %w", childPath, err)
 			}
 
@@ -306,6 +320,9 @@ func buildDir(fsys fs.FS, dir string, exclude []*regexp.Regexp) (*Snapshot, erro
 		case filetype&fs.ModeSymlink != 0:
 			target, err := fs.ReadLink(fsys, childPath)
 			if err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					continue
+				}
 				return nil, fmt.Errorf("read symlink %s: %w", childPath, err)
 			}
 
@@ -330,7 +347,7 @@ func buildDir(fsys fs.FS, dir string, exclude []*regexp.Regexp) (*Snapshot, erro
 			blobs[hash] = []byte(target)
 
 		default:
-			return nil, fmt.Errorf("path %s is not a supported file type", childPath)
+			continue
 		}
 	}
 
