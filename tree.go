@@ -20,6 +20,7 @@ const (
 	UnknownNode FileNodeType = iota
 	DirectoryNode
 	RegularNode
+	SymlinkNode
 )
 
 // A Hash is a SHA-256 digest. It implements [encoding.TextMarshaler] and
@@ -123,7 +124,7 @@ func diffDir(local *FileNode, remote *FileNode, prefix string) []DiffAction {
 				actions = append(actions, diffDir(l, r, path)...)
 
 			case l.Hash != r.Hash:
-				actions = append(actions, DiffAction{Kind: ActionKindReplace, Change: FileNodeChange{Path: path, Mode: RegularNode, Hash: r.Hash}})
+				actions = append(actions, DiffAction{Kind: ActionKindReplace, Change: FileNodeChange{Path: path, Mode: r.Mode, Hash: r.Hash}})
 			}
 		} else {
 			wasRename := false
@@ -235,6 +236,14 @@ func (n *FileNode) String() string {
 // new snapshot holding a Merkle tree representing the filesystem hierarchy,
 // while excluding files that match the patterns in exclude.
 // The root node is named ".".
+//
+// Symlinks are recorded as links and never followed, so the follower gets the
+// same link rather than a copy of its target. Their blob is the raw target.
+// Links with an absolute target or one resolving outside the root are skipped,
+// since the follower's root lives elsewhere and they would point at something
+// unrelated there.
+//
+// fsys must implement [fs.ReadLinkFS] if it contains symlinks.
 func BuildDirectorySnapshot(fsys fs.FS, exclude []*regexp.Regexp) (*Snapshot, error) {
 	// TODO: accept a context so that we can cancel tree growth
 	// safely with ctrl-c
@@ -294,9 +303,36 @@ func buildDir(fsys fs.FS, dir string, exclude []*regexp.Regexp) (*Snapshot, erro
 			children = append(children, &FileNode{Name: filename, Mode: RegularNode, Hash: hash})
 			blobs[hash] = content
 
+		// TODO: it could happen that exclude hides paths that are
+		// referenced by valid symlinks, so resolve this situation.
+		case filetype&fs.ModeSymlink != 0:
+			target, err := fs.ReadLink(fsys, childPath)
+			if err != nil {
+				return nil, fmt.Errorf("read symlink %s: %w", childPath, err)
+			}
+
+			// [fs.ValidPath] rejects ".." and leading slashes, so that way,
+			// we can be sure that we neither escape the current directory
+			// nor follow an absolute path.
+			// Joining with dir would hide an absolute target, so we additionally
+			// guard that with [path.IsAbs].
+			cleanedTarget := path.Join(dir, target)
+			if path.IsAbs(target) || !fs.ValidPath(cleanedTarget) {
+				continue
+			}
+
+			h := sha256.New()
+			h.Write([]byte{byte(SymlinkNode)})
+			h.Write([]byte(target))
+
+			var hash Hash
+			copy(hash[:], h.Sum(nil))
+
+			children = append(children, &FileNode{Name: filename, Mode: SymlinkNode, Hash: hash})
+			blobs[hash] = []byte(target)
+
 		default:
-			// TODO: follow symlinks instead of failing them
-			return nil, fmt.Errorf("path %s is not regular file or directory", childPath)
+			return nil, fmt.Errorf("path %s is not a supported file type", childPath)
 		}
 	}
 

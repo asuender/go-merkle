@@ -43,7 +43,7 @@ The wait starts after each rebuild finishes, so rebuilds never overlap.
 ## How it works
 
 The leader hashes its directory into a Merkle tree using SHA-256.
-A file's hash covers its contents, and a directory's hash covers the mode, name and hash of each child.
+A file's hash covers its contents, a symlink's hash covers its target path, and a directory's hash covers the mode, name and hash of each child.
 A change to any file therefore changes the hash of every directory above it, up to the root.
 
 The planned replication flow is:
@@ -58,7 +58,8 @@ The tree will be sent as JSON with hex-encoded hashes, and file contents will be
 
 ## Limitations
 
-- Only regular files and directories are supported. Building a snapshot fails on anything else, including symlinks.
+- Only regular files, directories and symlinks are supported. Building a snapshot fails on anything else, such as devices or sockets.
+- Symlinks are replicated as links and never followed. Links with an absolute target or one pointing outside the replicated directory are skipped. A link to an ignored file is kept and will dangle on the follower.
 - A snapshot holds the contents of every file in memory.
 - Followers must start in an empty directory.
 

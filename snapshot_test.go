@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"io/fs"
 	"path/filepath"
 	"regexp"
@@ -62,12 +63,76 @@ func TestSnapshotDiff(t *testing.T) {
 	}
 }
 
-func TestBuildDirectorySnapshotRejectsSymlink(t *testing.T) {
+func TestBuildDirectorySnapshotKeepsSymlinkInsideRoot(t *testing.T) {
 	fsys := fstest.MapFS{
-		"link": &fstest.MapFile{Data: []byte("target"), Mode: fs.ModeSymlink},
+		"a.txt": &fstest.MapFile{Data: []byte("content")},
+		"link":  &fstest.MapFile{Data: []byte("a.txt"), Mode: fs.ModeSymlink},
 	}
-	if _, err := BuildDirectorySnapshot(fsys, nil); err == nil {
-		t.Fatal("expected error for symlink")
+
+	snapshot := mustSnapshot(t, fsys, nil)
+
+	// sha256(byte(SymlinkNode) || "a.txt"), computed independently with shasum
+	var wantHash Hash
+	hex.Decode(wantHash[:], []byte("df8c7059061541560a9bf5320546d5937432ad53293bdcb45f47917529f04eb1"))
+
+	link := child(t, snapshot.root, "link")
+	want := &FileNode{Name: "link", Mode: SymlinkNode, Hash: wantHash}
+	if diff := cmp.Diff(want, link); diff != "" {
+		t.Fatalf("symlink node mismatch (-want +got):\n%s", diff)
+	}
+	if got := string(snapshot.blobs[wantHash]); got != "a.txt" {
+		t.Fatalf("symlink blob = %q, want %q", got, "a.txt")
+	}
+}
+
+func TestBuildDirectorySnapshotSkipsSymlinkEscapingRoot(t *testing.T) {
+	withoutLink := fstest.MapFS{
+		"sub/a.txt": &fstest.MapFile{Data: []byte("content")},
+	}
+	withLink := fstest.MapFS{
+		"sub/a.txt": &fstest.MapFile{Data: []byte("content")},
+		"sub/link":  &fstest.MapFile{Data: []byte("../../outside.txt"), Mode: fs.ModeSymlink},
+	}
+
+	want := mustSnapshot(t, withoutLink, nil)
+	got := mustSnapshot(t, withLink, nil)
+
+	if got.root.Hash != want.root.Hash {
+		t.Fatalf("root hash changed by escaping symlink:\n%s", got.root)
+	}
+}
+
+func TestBuildDirectorySnapshotSkipsSymlinkWithAbsoluteTarget(t *testing.T) {
+	withoutLink := fstest.MapFS{
+		"a.txt": &fstest.MapFile{Data: []byte("content")},
+	}
+	withLink := fstest.MapFS{
+		"a.txt": &fstest.MapFile{Data: []byte("content")},
+		"link":  &fstest.MapFile{Data: []byte("/etc/hosts"), Mode: fs.ModeSymlink},
+	}
+
+	want := mustSnapshot(t, withoutLink, nil)
+	got := mustSnapshot(t, withLink, nil)
+
+	if got.root.Hash != want.root.Hash {
+		t.Fatalf("root hash changed by absolute symlink:\n%s", got.root)
+	}
+}
+
+func TestBuildDirectorySnapshotKeepsNestedSymlinkPointingUpInsideRoot(t *testing.T) {
+	fsys := fstest.MapFS{
+		"a.txt":    &fstest.MapFile{Data: []byte("content")},
+		"sub/link": &fstest.MapFile{Data: []byte("../a.txt"), Mode: fs.ModeSymlink},
+	}
+
+	snapshot := mustSnapshot(t, fsys, nil)
+
+	link := child(t, snapshot.root, "sub", "link")
+	if link.Mode != SymlinkNode {
+		t.Fatalf("sub/link mode = %v, want SymlinkNode", link.Mode)
+	}
+	if got := string(snapshot.blobs[link.Hash]); got != "../a.txt" {
+		t.Fatalf("symlink blob = %q, want %q", got, "../a.txt")
 	}
 }
 

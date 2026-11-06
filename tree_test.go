@@ -26,6 +26,17 @@ func file(name string, tag byte) *FileNode {
 	return &FileNode{Name: name, Mode: RegularNode, Hash: hash}
 }
 
+func symlink(name string, target string) *FileNode {
+	h := sha256.New()
+	h.Write([]byte{byte(SymlinkNode)})
+	h.Write([]byte(target))
+
+	var hash [32]byte
+	copy(hash[:], h.Sum(nil))
+
+	return &FileNode{Name: name, Mode: SymlinkNode, Hash: hash}
+}
+
 func dir(name string, children ...*FileNode) *FileNode {
 	h := sha256.New()
 	h.Write([]byte{byte(DirectoryNode)})
@@ -202,6 +213,15 @@ func TestDiff(t *testing.T) {
 				createAction("new", RegularNode, added.Hash),
 				deleteAction("gone"),
 			},
+		},
+		{
+			name:   "retarget symlink",
+			local:  dir("root", symlink("l", "a")),
+			remote: dir("root", symlink("l", "b")),
+			want: []DiffAction{{
+				Kind:   ActionKindReplace,
+				Change: FileNodeChange{Path: "l", Mode: SymlinkNode, Hash: symlink("l", "b").Hash},
+			}},
 		},
 		{
 			name:   "untouched sibling",
