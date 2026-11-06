@@ -245,8 +245,6 @@ func (n *FileNode) String() string {
 //
 // fsys must implement [fs.ReadLinkFS] if it contains symlinks.
 func BuildDirectorySnapshot(fsys fs.FS, exclude []*regexp.Regexp) (*Snapshot, error) {
-	// TODO: accept a context so that we can cancel tree growth
-	// safely with ctrl-c
 	return buildDir(fsys, ".", exclude)
 }
 
