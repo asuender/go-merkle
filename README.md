@@ -27,14 +27,18 @@ go-merkle lead --port 8000
 go-merkle follow --host 127.0.0.1 --port 8000
 ```
 
-| Command  | Flag       | Default     | Description                                |
-| -------- | ---------- | ----------- | ------------------------------------------ |
-| `lead`   | `--port`   | `8000`      | Port to serve updates on                   |
-| `lead`   | `--ignore` | none        | Comma-separated regexes of names to ignore |
-| `follow` | `--host`   | `127.0.0.1` | Leader host                                |
-| `follow` | `--port`   | `8000`      | Leader port                                |
+| Command  | Flag         | Default     | Description                                |
+| -------- | ------------ | ----------- | ------------------------------------------ |
+| `lead`   | `--port`     | `8000`      | Port to serve updates on                   |
+| `lead`   | `--ignore`   | none        | Comma-separated regexes of names to ignore |
+| `lead`   | `--interval` | `10s`       | How often the snapshot is rebuilt          |
+| `follow` | `--host`     | `127.0.0.1` | Leader host                                |
+| `follow` | `--port`     | `8000`      | Leader port                                |
 
-`--ignore` is parsed but has no effect yet.
+`--ignore` patterns are matched against each file or directory name, not its full path. An ignored directory is skipped with everything inside it.
+
+`--interval` takes a Go duration such as `500ms`, `30s` or `1m`, and must be positive.
+The wait starts after each rebuild finishes, so rebuilds never overlap.
 
 ## How it works
 

@@ -22,8 +22,9 @@ import (
 )
 
 const (
-	DefaultHost = "127.0.0.1"
-	DefaultPort = 8000
+	DefaultHost     = "127.0.0.1"
+	DefaultPort     = 8000
+	DefaultInterval = 10 * time.Second
 )
 
 const usage = `go-merkle - single-leader file replication based on Merkle trees
@@ -36,7 +37,7 @@ Commands:
   follow    Replicate a leader's files into the current (empty) directory
 
 Examples:
-  go-merkle lead --port 8000
+  go-merkle lead --port 8000 --interval 30s
   go-merkle follow --host 127.0.0.1 --port 8000`
 
 // parseIgnorePatterns extracts multiple comma-separated
@@ -117,7 +118,7 @@ func (l *leader) handleBlob(w http.ResponseWriter, r *http.Request) {
 // RunLeader runs the tool in leader mode in the root directory
 // of fsys, ignoring the files specified by ignorePatterns and serving
 // the Merkle trees via port.
-func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, port int, ignorePatterns []*regexp.Regexp) error {
+func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, port int, ignorePatterns []*regexp.Regexp, interval time.Duration) error {
 	// we build the snapshot before starting the server
 	// to avoid requests returning nil if the initial snapshot
 	// hasn't been stored yet
@@ -130,6 +131,7 @@ func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, port int, ig
 	l.snapshot.Store(initialSnapshot)
 
 	logger.Println("stored initial snapshot")
+	logger.Printf("rebuilding snapshot every %v", interval)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /tree", l.handleTree)
@@ -161,7 +163,7 @@ func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, port int, ig
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(time.Second * 10):
+			case <-time.After(interval):
 			}
 		}
 	}()
@@ -218,6 +220,7 @@ func main() {
 	leaderCmd := flag.NewFlagSet("lead", flag.ExitOnError)
 	leaderPort := leaderCmd.Int("port", DefaultPort, "The port the leader serves its updates on.")
 	leaderIgnorePatterns := leaderCmd.String("ignore", "", "The patterns of files that shall be ignored by the leader.")
+	leaderInterval := leaderCmd.Duration("interval", DefaultInterval, "How often the leader rebuilds its snapshot (e.g. 500ms, 30s, 1m).")
 
 	followerCmd := flag.NewFlagSet("follow", flag.ExitOnError)
 	followerHost := followerCmd.String("host", DefaultHost, "The host the follower receives updates from.")
@@ -245,7 +248,11 @@ func main() {
 			logger.Fatalf("%v", err)
 		}
 
-		if err := RunLeader(ctx, os.DirFS("."), logger, *leaderPort, ignorePatterns); err != nil {
+		if *leaderInterval <= 0 {
+			logger.Fatalf("expected positive interval.")
+		}
+
+		if err := RunLeader(ctx, os.DirFS("."), logger, *leaderPort, ignorePatterns, *leaderInterval); err != nil {
 			logger.Fatalf("%v", err)
 		}
 
