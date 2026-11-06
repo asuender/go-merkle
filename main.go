@@ -22,9 +22,10 @@ import (
 )
 
 const (
-	DefaultHost     = "127.0.0.1"
-	DefaultPort     = 8000
-	DefaultInterval = 10 * time.Second
+	DefaultHost         = "127.0.0.1"
+	DefaultPort         = 8000
+	DefaultInterval     = 10 * time.Second
+	DefaultMaxStaleness = time.Minute
 )
 
 const usage = `go-merkle - single-leader file replication based on Merkle trees
@@ -118,7 +119,8 @@ func (l *leader) handleBlob(w http.ResponseWriter, r *http.Request) {
 // RunLeader runs the tool in leader mode in the root directory
 // of fsys, ignoring the files specified by ignorePatterns and serving
 // the Merkle trees via port.
-func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, port int, ignorePatterns []*regexp.Regexp, interval time.Duration) error {
+// TODO: wrap parameters inside LeaderConfig{} struct
+func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, port int, ignorePatterns []*regexp.Regexp, interval time.Duration, maxStaleness time.Duration) error {
 	// we build the snapshot before starting the server
 	// to avoid requests returning nil if the initial snapshot
 	// hasn't been stored yet
@@ -126,6 +128,7 @@ func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, port int, ig
 	if err != nil {
 		return err
 	}
+	lastSuccessfulRebuild := time.Now()
 
 	l := &leader{}
 	l.snapshot.Store(initialSnapshot)
@@ -151,13 +154,15 @@ func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, port int, ig
 		for {
 			snapshot, err := BuildDirectorySnapshot(fsys, ignorePatterns)
 			if err != nil {
-				// TODO: it could happen that sequential rebuilds fail due to permission reasons etc.
-				// however, this is unlikely. In the future, I would consider counting
-				// consecutive errors from tree growth and stop the server completely
-				// after a specified threshold.
+				if maxStaleness != 0 && time.Now().After(lastSuccessfulRebuild.Add(maxStaleness)) {
+					cancel(fmt.Errorf("no successful rebuild for %v: %w", maxStaleness, err))
+					return
+				}
+
 				logger.Printf("rebuild failed: %v", err)
 			} else {
 				l.snapshot.Store(snapshot)
+				lastSuccessfulRebuild = time.Now()
 			}
 
 			select {
@@ -178,7 +183,7 @@ func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, port int, ig
 
 	go func() {
 		if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
-			cancel(err)
+			cancel(fmt.Errorf("HTTP server: %w", err))
 		}
 	}()
 
@@ -192,9 +197,7 @@ func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, port int, ig
 	}
 
 	if err := context.Cause(ctx); !errors.Is(err, context.Canceled) {
-		// currently, context can only be cancelled by the HTTP server,
-		// as the other goroutine does not throw fatal errors that stop the execution.
-		return fmt.Errorf("HTTP server: %w", err)
+		return err
 	}
 
 	return nil
@@ -221,6 +224,7 @@ func main() {
 	leaderPort := leaderCmd.Int("port", DefaultPort, "The port the leader serves its updates on.")
 	leaderIgnorePatterns := leaderCmd.String("ignore", "", "The patterns of files that shall be ignored by the leader.")
 	leaderInterval := leaderCmd.Duration("interval", DefaultInterval, "How often the leader rebuilds its snapshot (e.g. 500ms, 30s, 1m).")
+	leaderMaxStaleness := leaderCmd.Duration("max-staleness", DefaultMaxStaleness, "How long rebuilds may fail before exiting (e.g. 500ms, 30s, 1m). 0 disables this.")
 
 	followerCmd := flag.NewFlagSet("follow", flag.ExitOnError)
 	followerHost := followerCmd.String("host", DefaultHost, "The host the follower receives updates from.")
@@ -252,7 +256,11 @@ func main() {
 			logger.Fatalf("expected positive interval.")
 		}
 
-		if err := RunLeader(ctx, os.DirFS("."), logger, *leaderPort, ignorePatterns, *leaderInterval); err != nil {
+		if *leaderMaxStaleness < 0 {
+			logger.Fatalf("expected max-staleness to be >= 0.")
+		}
+
+		if err := RunLeader(ctx, os.DirFS("."), logger, *leaderPort, ignorePatterns, *leaderInterval, *leaderMaxStaleness); err != nil {
 			logger.Fatalf("%v", err)
 		}
 
