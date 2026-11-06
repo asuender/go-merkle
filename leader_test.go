@@ -54,7 +54,9 @@ func startLeader(t *testing.T, fsys fs.FS, interval, maxStaleness time.Duration)
 	logger := log.New(io.Discard, "", 0)
 
 	errc := make(chan error, 1)
-	go func() { errc <- RunLeader(ctx, fsys, logger, 0, nil, interval, maxStaleness) }()
+	go func() {
+		errc <- RunLeader(ctx, fsys, logger, LeaderConfig{Interval: interval, MaxStaleness: maxStaleness})
+	}()
 
 	return cancel, errc
 }

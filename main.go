@@ -64,6 +64,35 @@ func parseIgnorePatterns(s string) ([](*regexp.Regexp), error) {
 	return patterns, nil
 }
 
+// LeaderConfig configures [RunLeader].
+type LeaderConfig struct {
+	// Port 0 lets the OS pick a free port.
+	Port int
+	// IgnorePatterns are matched against file and directory names.
+	IgnorePatterns []*regexp.Regexp
+	// Interval must be positive.
+	Interval time.Duration
+	// MaxStaleness is how long rebuilds may keep failing before the leader
+	// exits. 0 disables this, so the leader keeps serving its last snapshot.
+	MaxStaleness time.Duration
+}
+
+func (cfg LeaderConfig) validate() error {
+	if cfg.Interval <= 0 {
+		return fmt.Errorf("expected positive interval, got %v", cfg.Interval)
+	}
+	if cfg.MaxStaleness < 0 {
+		return fmt.Errorf("expected non-negative max staleness, got %v", cfg.MaxStaleness)
+	}
+	return nil
+}
+
+// FollowerConfig configures [RunFollower].
+type FollowerConfig struct {
+	Host string
+	Port int
+}
+
 type leader struct {
 	// snapshot is replaced as a whole on every rebuild and never mutated
 	// after Store, so handlers can read it without locking.
@@ -117,14 +146,16 @@ func (l *leader) handleBlob(w http.ResponseWriter, r *http.Request) {
 }
 
 // RunLeader runs the tool in leader mode in the root directory
-// of fsys, ignoring the files specified by ignorePatterns and serving
-// the Merkle trees via port.
-// TODO: wrap parameters inside LeaderConfig{} struct
-func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, port int, ignorePatterns []*regexp.Regexp, interval time.Duration, maxStaleness time.Duration) error {
+// of fsys and serves its Merkle trees until ctx is done.
+func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, cfg LeaderConfig) error {
+	if err := cfg.validate(); err != nil {
+		return err
+	}
+
 	// we build the snapshot before starting the server
 	// to avoid requests returning nil if the initial snapshot
 	// hasn't been stored yet
-	initialSnapshot, err := BuildDirectorySnapshot(fsys, ignorePatterns)
+	initialSnapshot, err := BuildDirectorySnapshot(fsys, cfg.IgnorePatterns)
 	if err != nil {
 		return err
 	}
@@ -134,14 +165,14 @@ func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, port int, ig
 	l.snapshot.Store(initialSnapshot)
 
 	logger.Println("stored initial snapshot")
-	logger.Printf("rebuilding snapshot every %v", interval)
+	logger.Printf("rebuilding snapshot every %v", cfg.Interval)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /tree", l.handleTree)
 	mux.HandleFunc("GET /blobs/{hash}", l.handleBlob)
 
 	srv := &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
+		Addr:    fmt.Sprintf(":%d", cfg.Port),
 		Handler: mux,
 	}
 
@@ -152,10 +183,10 @@ func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, port int, ig
 
 	go func() {
 		for {
-			snapshot, err := BuildDirectorySnapshot(fsys, ignorePatterns)
+			snapshot, err := BuildDirectorySnapshot(fsys, cfg.IgnorePatterns)
 			if err != nil {
-				if maxStaleness != 0 && time.Now().After(lastSuccessfulRebuild.Add(maxStaleness)) {
-					cancel(fmt.Errorf("no successful rebuild for %v: %w", maxStaleness, err))
+				if cfg.MaxStaleness != 0 && time.Now().After(lastSuccessfulRebuild.Add(cfg.MaxStaleness)) {
+					cancel(fmt.Errorf("no successful rebuild for %v: %w", cfg.MaxStaleness, err))
 					return
 				}
 
@@ -168,7 +199,7 @@ func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, port int, ig
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(interval):
+			case <-time.After(cfg.Interval):
 			}
 		}
 	}()
@@ -204,8 +235,8 @@ func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, port int, ig
 }
 
 // RunFollower runs the tool in follower mode by connecting to the leader
-// specified by host and port.
-func RunFollower(ctx context.Context, fsys fs.FS, logger *log.Logger, host string, port int) error {
+// specified by cfg.
+func RunFollower(ctx context.Context, fsys fs.FS, logger *log.Logger, cfg FollowerConfig) error {
 	entries, err := fs.ReadDir(fsys, ".")
 	if err != nil {
 		return fmt.Errorf("error reading current directory: %w", err)
@@ -220,15 +251,17 @@ func RunFollower(ctx context.Context, fsys fs.FS, logger *log.Logger, host strin
 }
 
 func main() {
+	var leaderCfg LeaderConfig
 	leaderCmd := flag.NewFlagSet("lead", flag.ExitOnError)
-	leaderPort := leaderCmd.Int("port", DefaultPort, "The port the leader serves its updates on.")
+	leaderCmd.IntVar(&leaderCfg.Port, "port", DefaultPort, "The port the leader serves its updates on.")
 	leaderIgnorePatterns := leaderCmd.String("ignore", "", "The patterns of files that shall be ignored by the leader.")
-	leaderInterval := leaderCmd.Duration("interval", DefaultInterval, "How often the leader rebuilds its snapshot (e.g. 500ms, 30s, 1m).")
-	leaderMaxStaleness := leaderCmd.Duration("max-staleness", DefaultMaxStaleness, "How long rebuilds may fail before exiting (e.g. 500ms, 30s, 1m). 0 disables this.")
+	leaderCmd.DurationVar(&leaderCfg.Interval, "interval", DefaultInterval, "How often the leader rebuilds its snapshot (e.g. 500ms, 30s, 1m).")
+	leaderCmd.DurationVar(&leaderCfg.MaxStaleness, "max-staleness", DefaultMaxStaleness, "How long rebuilds may fail before exiting (e.g. 500ms, 30s, 1m). 0 disables this.")
 
+	var followerCfg FollowerConfig
 	followerCmd := flag.NewFlagSet("follow", flag.ExitOnError)
-	followerHost := followerCmd.String("host", DefaultHost, "The host the follower receives updates from.")
-	followerPort := followerCmd.Int("port", DefaultPort, "The port the follower receives updates from.")
+	followerCmd.StringVar(&followerCfg.Host, "host", DefaultHost, "The host the follower receives updates from.")
+	followerCmd.IntVar(&followerCfg.Port, "port", DefaultPort, "The port the follower receives updates from.")
 
 	if len(os.Args) < 2 {
 		fmt.Println("expected `lead` or `follow` subcommand.")
@@ -251,16 +284,9 @@ func main() {
 		if err != nil {
 			logger.Fatalf("%v", err)
 		}
+		leaderCfg.IgnorePatterns = ignorePatterns
 
-		if *leaderInterval <= 0 {
-			logger.Fatalf("expected positive interval.")
-		}
-
-		if *leaderMaxStaleness < 0 {
-			logger.Fatalf("expected max-staleness to be >= 0.")
-		}
-
-		if err := RunLeader(ctx, os.DirFS("."), logger, *leaderPort, ignorePatterns, *leaderInterval, *leaderMaxStaleness); err != nil {
+		if err := RunLeader(ctx, os.DirFS("."), logger, leaderCfg); err != nil {
 			logger.Fatalf("%v", err)
 		}
 
@@ -268,7 +294,7 @@ func main() {
 		followerCmd.Parse(os.Args[2:])
 
 		logger := log.New(os.Stderr, "follower: ", 0)
-		if err := RunFollower(ctx, os.DirFS("."), logger, *followerHost, *followerPort); err != nil {
+		if err := RunFollower(ctx, os.DirFS("."), logger, followerCfg); err != nil {
 			logger.Fatalf("%v", err)
 		}
 
