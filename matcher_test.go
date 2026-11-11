@@ -1,8 +1,14 @@
 package main
 
 import (
+	"io/fs"
+	"path/filepath"
+	"slices"
 	"testing"
+	"testing/fstest"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 // TestWildmatch ports the table from git's t/t3070-wildmatch.sh at commit
@@ -242,4 +248,286 @@ func TestWildmatchIsNotExponential(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("wildmatch did not finish within 2s")
 	}
+}
+
+type excludeCase struct {
+	path  string
+	isDir bool
+	want  bool
+}
+
+// excludeTests is adapted from git's t/t0008-ignores.sh. git scopes each
+// .gitignore to its own directory, while go-merkle has one list applied at the
+// root, so the patterns are flattened into one list per group and the expected
+// results come from running `git check-ignore --no-index` on that list.
+//
+// Only paths whose parent directories aren't excluded are listed:
+// check-ignore reports those as ignored too, but buildDir never descends far
+// enough to ask, so they are covered by the snapshot tests instead.
+var excludeTests = []struct {
+	name     string
+	patterns []string
+	cases    []excludeCase
+}{
+	{
+		name:     "standard ignores",
+		patterns: []string{"one", "ignored-*", "top-level-dir/"},
+		cases: []excludeCase{
+			{"one", false, true},
+			{"a/one", false, true},
+			{"not-ignored", false, false},
+			{"ignored-and-untracked", false, true},
+			{"a/ignored-and-untracked", false, true},
+			{"top-level-dir", true, true},
+			{"a/top-level-dir", true, true},
+			{"top-level-dir", false, false},
+		},
+	},
+	{
+		// The --stdin list, plus the patterns behind "nested include of
+		// negated pattern". Flattening makes "!on*" apply everywhere, so
+		// "one" is no longer excluded anywhere.
+		name:     "negation and last match wins",
+		patterns: []string{"one", "two*", "*three", "!on*", "!two"},
+		cases: []excludeCase{
+			{"one", false, false},
+			{"a/b/one", false, false},
+			{"a/b/on", false, false},
+			{"a/b/one one", false, false},
+			{"a/b/two", false, false},
+			{"a/b/twooo", false, true},
+			{"a/3-three", false, true},
+			{"a/three-not-this-one", false, false},
+			{"a/b/not-ignored", false, false},
+		},
+	},
+	{
+		name:     "ignored sub-directory",
+		patterns: []string{"ignored-dir/"},
+		cases: []excludeCase{
+			{"a/b/ignored-dir", true, true},
+			{"a/b/ignored-dir", false, false},
+		},
+	},
+	{
+		name:     "exact prefix matching with root",
+		patterns: []string{"/git/"},
+		cases: []excludeCase{
+			{"git", true, true},
+			{"git-foo", true, false},
+			{"a/git", true, false},
+		},
+	},
+	{
+		name:     "exact prefix matching without root",
+		patterns: []string{"git/"},
+		cases: []excludeCase{
+			{"git", true, true},
+			{"a/git", true, true},
+			{"git-foo", true, false},
+			{"a/git-foo", true, false},
+		},
+	},
+	{
+		name:     "directories and ** matches",
+		patterns: []string{"data/**", "!data/**/", "!data/**/*.txt"},
+		cases: []excludeCase{
+			{"file", false, false},
+			{"data", true, false},
+			{"data/file", false, true},
+			{"data/data1", true, false},
+			{"data/data1/file1", false, true},
+			{"data/data1/file1.txt", false, false},
+			{"data/data2/file2", false, true},
+			{"data/data2/file2.txt", false, false},
+		},
+	},
+	{
+		name:     "** not confused by matching leading prefix",
+		patterns: []string{"foo**/bar"},
+		cases: []excludeCase{
+			{"foobar", false, false},
+			{"foo/bar", false, true},
+		},
+	},
+
+	// The remaining groups cover rules from docs/patterns.md that t0008
+	// doesn't test directly.
+	{
+		name:     "leading slash anchors to the root",
+		patterns: []string{"/build"},
+		cases: []excludeCase{
+			{"build", false, true},
+			{"build", true, true},
+			{"a/build", false, false},
+		},
+	},
+	{
+		name:     "middle slash anchors to the root",
+		patterns: []string{"a/b"},
+		cases: []excludeCase{
+			{"a/b", false, true},
+			{"x/a/b", false, false},
+		},
+	},
+	{
+		name:     "trailing slash matches directories only",
+		patterns: []string{"cache/"},
+		cases: []excludeCase{
+			{"cache", true, true},
+			{"x/cache", true, true},
+			{"cache", false, false},
+		},
+	},
+	{
+		// The example from the gitignore docs, word for word.
+		name:     "doc/frotz/ example",
+		patterns: []string{"doc/frotz/"},
+		cases: []excludeCase{
+			{"doc/frotz", true, true},
+			{"a/doc/frotz", true, false},
+			{"doc/frotz", false, false},
+		},
+	},
+	{
+		name:     "frotz/ example",
+		patterns: []string{"frotz/"},
+		cases: []excludeCase{
+			{"frotz", true, true},
+			{"a/frotz", true, true},
+			{"a/frotz", false, false},
+		},
+	},
+	{
+		// buildDir passes symlinks as non-directories, as git does, so a
+		// directory-only pattern never matches a link, whatever it points at.
+		name:     "trailing slash ignores symlinks",
+		patterns: []string{"link/"},
+		cases: []excludeCase{
+			{"link", false, false},
+		},
+	},
+	{
+		name:     "escaped leading bang is literal",
+		patterns: []string{`\!x`},
+		cases: []excludeCase{
+			{"!x", false, true},
+			{"x", false, false},
+		},
+	},
+	{
+		name:     "patterns empty after removing syntax never match",
+		patterns: []string{"/", "!", "!/"},
+		cases: []excludeCase{
+			{"a", false, false},
+			{"a", true, false},
+		},
+	},
+	{
+		name:     "negation after exclusion",
+		patterns: []string{"*.log", "!keep.log"},
+		cases: []excludeCase{
+			{"x.log", false, true},
+			{"keep.log", false, false},
+			{"a/keep.log", false, false},
+		},
+	},
+}
+
+func TestMatcherExcludes(t *testing.T) {
+	for _, group := range excludeTests {
+		t.Run(group.name, func(t *testing.T) {
+			m := mustMatcher(t, group.patterns...)
+			for _, c := range group.cases {
+				if got := m.Excludes(c.path, c.isDir); got != c.want {
+					t.Errorf("Excludes(%q, isDir=%v) = %v, want %v", c.path, c.isDir, got, c.want)
+				}
+			}
+		})
+	}
+}
+
+func TestNilMatcherExcludesNothing(t *testing.T) {
+	var m *Matcher
+	if m.Excludes("a", false) {
+		t.Error("nil Matcher excluded a path")
+	}
+}
+
+// A malformed pattern would otherwise never match, so a typo on the command
+// line would silently replicate files the user meant to exclude.
+func TestNewMatcherRejectsMalformedPatterns(t *testing.T) {
+	// "foo\/" only becomes malformed once the trailing slash is removed, so
+	// validation has to look at the glob wildmatch sees, not the raw argument.
+	//
+	// The last four hide the problem right after an escape or a bracket, which
+	// a scan that steps past a whole token and then one more byte never sees.
+	for _, p := range []string{`foo\`, `foo\/`, "[a", "a[]b", "[[:nope:]]", `[a\`, `\a\`, `[a]\`, "[a][b", `\[[a`} {
+		if _, err := NewMatcher([]string{p}); err == nil {
+			t.Errorf("NewMatcher(%q) succeeded, want an error", p)
+		}
+	}
+}
+
+// Each of these contains "\" or "[" that only looks malformed if validation
+// reads escaped characters or bracket contents as syntax.
+func TestNewMatcherAcceptsEscapedAndBracketSyntax(t *testing.T) {
+	for _, p := range []string{`\[a`, `foo\\`, `\!x`, "[]a]", `[\]]`, "[[:]ab]", "[[:alpha:]]", "a[!/]b"} {
+		if _, err := NewMatcher([]string{p}); err != nil {
+			t.Errorf("NewMatcher(%q) = %v, want no error", p, err)
+		}
+	}
+}
+
+func TestBuildDirectorySnapshotSkipsIgnoredSubDirectory(t *testing.T) {
+	fsys := fstest.MapFS{
+		"a/b/ignored-dir/foo":    &fstest.MapFile{Data: []byte("foo")},
+		"a/b/ignored-dir/twoooo": &fstest.MapFile{Data: []byte("twoooo")},
+		"a/b/ignored-dir/seven":  &fstest.MapFile{Data: []byte("seven")},
+		"a/b/kept":               &fstest.MapFile{Data: []byte("kept")},
+	}
+
+	// git can't re-include a file whose parent directory is excluded, and
+	// neither can buildDir, since it never reads an excluded directory.
+	got := snapshotPaths(t, fsys, "ignored-dir/", "!ignored-dir/foo")
+	want := []string{"a", "a/b", "a/b/kept"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("snapshot paths mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestBuildDirectorySnapshotReincludesThroughDirectories(t *testing.T) {
+	fsys := fstest.MapFS{
+		"file":                 &fstest.MapFile{Data: []byte("file")},
+		"data/file":            &fstest.MapFile{Data: []byte("file")},
+		"data/data1/file1":     &fstest.MapFile{Data: []byte("file1")},
+		"data/data1/file1.txt": &fstest.MapFile{Data: []byte("file1.txt")},
+		"data/data2/file2":     &fstest.MapFile{Data: []byte("file2")},
+		"data/data2/file2.txt": &fstest.MapFile{Data: []byte("file2.txt")},
+	}
+
+	got := snapshotPaths(t, fsys, "data/**", "!data/**/", "!data/**/*.txt")
+	want := []string{
+		"data",
+		"data/data1",
+		"data/data1/file1.txt",
+		"data/data2",
+		"data/data2/file2.txt",
+		"file",
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("snapshot paths mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func snapshotPaths(t *testing.T, fsys fs.FS, patterns ...string) []string {
+	t.Helper()
+	snapshot := mustSnapshot(t, fsys, mustMatcher(t, patterns...))
+
+	var paths []string
+	for p := range collect(snapshot.root) {
+		paths = append(paths, filepath.ToSlash(p))
+	}
+	slices.Sort(paths)
+	return paths
 }

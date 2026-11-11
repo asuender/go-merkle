@@ -30,13 +30,16 @@ go-merkle follow --host 127.0.0.1 --port 8000
 | Command  | Flag              | Default     | Description                                  |
 | -------- | ----------------- | ----------- | -------------------------------------------- |
 | `lead`   | `--port`          | `8000`      | Port to serve updates on                     |
-| `lead`   | `--ignore`        | none        | Comma-separated regexes of names to ignore   |
+| `lead`   | `--ignore`        | none        | Pattern of paths to ignore, repeatable       |
 | `lead`   | `--interval`      | `10s`       | How often the snapshot is rebuilt            |
 | `lead`   | `--max-staleness` | `1m`        | How long rebuilds may keep failing           |
 | `follow` | `--host`          | `127.0.0.1` | Leader host                                  |
 | `follow` | `--port`          | `8000`      | Leader port                                  |
 
-`--ignore` patterns are matched against each file or directory name, not its full path. An ignored directory is skipped with everything inside it.
+`--ignore` takes one pattern per flag, so pass it once for every pattern: `--ignore '*.tmp' --ignore '/build/'`.
+Patterns follow the [gitignore](https://git-scm.com/docs/gitignore#_pattern_format) syntax and are matched against paths relative to the replicated directory: a pattern without a slash matches a name at any depth, one with a slash is anchored to the root, a trailing slash matches only directories, `**` spans directories, and a leading `!` re-includes what an earlier pattern excluded. The last matching pattern wins.
+An ignored directory is skipped with everything inside it, so nothing below it can be re-included.
+Comments, blank lines and the trailing-whitespace rules don't apply, since patterns come from flags rather than a file.
 
 `--interval` takes a Go duration such as `500ms`, `30s` or `1m`, and must be positive.
 The wait starts after each rebuild finishes, so rebuilds never overlap.

@@ -9,7 +9,6 @@ import (
 	"maps"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
 )
 
@@ -235,7 +234,7 @@ func (n *FileNode) String() string {
 
 // BuildDirectorySnapshot recursively traverses fsys from its root and grows a
 // new snapshot holding a Merkle tree representing the filesystem hierarchy,
-// while excluding files that match the patterns in exclude.
+// leaving out every entry that matcher excludes.
 // The root node is named ".".
 //
 // Symlinks are recorded as links and never followed, so the follower gets the
@@ -250,11 +249,11 @@ func (n *FileNode) String() string {
 // leaving an existing entry out would delete it on the followers.
 //
 // fsys must implement [fs.ReadLinkFS] if it contains symlinks.
-func BuildDirectorySnapshot(fsys fs.FS, exclude []*regexp.Regexp) (*Snapshot, error) {
-	return buildDir(fsys, ".", exclude)
+func BuildDirectorySnapshot(fsys fs.FS, matcher *Matcher) (*Snapshot, error) {
+	return buildDir(fsys, ".", matcher)
 }
 
-func buildDir(fsys fs.FS, dir string, exclude []*regexp.Regexp) (*Snapshot, error) {
+func buildDir(fsys fs.FS, dir string, matcher *Matcher) (*Snapshot, error) {
 	entries, err := fs.ReadDir(fsys, dir)
 	if err != nil {
 		return nil, fmt.Errorf("read dir %s: %w", dir, err)
@@ -266,24 +265,18 @@ func buildDir(fsys fs.FS, dir string, exclude []*regexp.Regexp) (*Snapshot, erro
 	for _, entry := range entries {
 		filename := entry.Name()
 		filetype := entry.Type()
+		childPath := path.Join(dir, filename)
 
-		ignore := false
-		for _, pattern := range exclude {
-			if pattern.MatchString(filename) {
-				ignore = true
-				break
-			}
-		}
-
-		if ignore {
+		// TODO: a pattern like "abc/**" excludes everything inside abc but not abc
+		// itself, so followers end up with an empty abc directory. Git never
+		// notices, since it doesn't track empty directories.
+		if matcher.Excludes(childPath, filetype.IsDir()) {
 			continue
 		}
 
-		childPath := path.Join(dir, filename)
-
 		switch {
 		case filetype.IsDir():
-			nested, err := buildDir(fsys, childPath, exclude)
+			nested, err := buildDir(fsys, childPath, matcher)
 			if err != nil {
 				// If the nested subdirectory can't be read, [buildDir] immediately returns
 				// [fs.ErrNotExist], in which case we skip it as we do with other file types.
@@ -315,8 +308,8 @@ func buildDir(fsys fs.FS, dir string, exclude []*regexp.Regexp) (*Snapshot, erro
 			children = append(children, &FileNode{Name: filename, Mode: RegularNode, Hash: hash})
 			blobs[hash] = content
 
-		// TODO: it could happen that exclude hides paths that are
-		// referenced by valid symlinks, so resolve this situation.
+		// TODO: the matcher may exclude a path that a valid symlink points at,
+		// leaving the link dangling on the followers, so resolve this situation.
 		case filetype&fs.ModeSymlink != 0:
 			target, err := fs.ReadLink(fsys, childPath)
 			if err != nil {

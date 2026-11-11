@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io/fs"
 	"path/filepath"
-	"regexp"
 	"testing"
 	"testing/fstest"
 
@@ -49,7 +48,7 @@ func TestSnapshotDiff(t *testing.T) {
 
 	remoteFS["skip.tmp"] = &fstest.MapFile{Data: []byte("ignored")}
 	remoteFS["extra.txt"] = &fstest.MapFile{Data: []byte("added")}
-	exclude := []*regexp.Regexp{regexp.MustCompile(`\.tmp$`)}
+	exclude := mustMatcher(t, "*.tmp")
 	local = mustSnapshot(t, localFS, exclude)
 	remote = mustSnapshot(t, remoteFS, exclude)
 	added := child(t, remote.root, "extra.txt")
@@ -274,9 +273,9 @@ func TestBuildDirectorySnapshotFailsOnVanishedRoot(t *testing.T) {
 	}
 }
 
-func mustSnapshot(t *testing.T, fsys fs.FS, exclude []*regexp.Regexp) *Snapshot {
+func mustSnapshot(t *testing.T, fsys fs.FS, matcher *Matcher) *Snapshot {
 	t.Helper()
-	snapshot, err := BuildDirectorySnapshot(fsys, exclude)
+	snapshot, err := BuildDirectorySnapshot(fsys, matcher)
 	if err != nil {
 		t.Fatalf("BuildDirectorySnapshot: %v", err)
 	}
@@ -299,4 +298,13 @@ func child(t *testing.T, node *FileNode, names ...string) *FileNode {
 		node = next
 	}
 	return node
+}
+
+func mustMatcher(t *testing.T, patterns ...string) *Matcher {
+	t.Helper()
+	matcher, err := NewMatcher(patterns)
+	if err != nil {
+		t.Fatalf("NewMatcher(%q): %v", patterns, err)
+	}
+	return matcher
 }

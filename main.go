@@ -14,8 +14,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"regexp"
-	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -41,35 +39,13 @@ Examples:
   go-merkle lead --port 8000 --interval 30s
   go-merkle follow --host 127.0.0.1 --port 8000`
 
-// parseIgnorePatterns extracts multiple comma-separated
-// ignore (regex) patterns from s.
-func parseIgnorePatterns(s string) ([](*regexp.Regexp), error) {
-	// empty strings compile to a regex that matches everything,
-	// therefore we need to exit early here
-	if len(strings.TrimSpace(s)) == 0 {
-		return [](*regexp.Regexp){}, nil
-	}
-
-	patterns := [](*regexp.Regexp){}
-
-	for s := range strings.SplitSeq(s, ",") {
-		p, err := regexp.Compile(s)
-		if err != nil {
-			return nil, err
-		}
-
-		patterns = append(patterns, p)
-	}
-
-	return patterns, nil
-}
-
 // LeaderConfig configures [RunLeader].
 type LeaderConfig struct {
 	// Port 0 lets the OS pick a free port.
 	Port int
-	// IgnorePatterns are matched against file and directory names.
-	IgnorePatterns []*regexp.Regexp
+	// Matcher decides which paths, relative to the replicated root, are left
+	// out of each snapshot. A nil Matcher excludes nothing.
+	Matcher *Matcher
 	// Interval must be positive.
 	Interval time.Duration
 	// MaxStaleness is how long rebuilds may keep failing before the leader
@@ -155,7 +131,7 @@ func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, cfg LeaderCo
 	// we build the snapshot before starting the server
 	// to avoid requests returning nil if the initial snapshot
 	// hasn't been stored yet
-	initialSnapshot, err := BuildDirectorySnapshot(fsys, cfg.IgnorePatterns)
+	initialSnapshot, err := BuildDirectorySnapshot(fsys, cfg.Matcher)
 	if err != nil {
 		return err
 	}
@@ -183,7 +159,7 @@ func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, cfg LeaderCo
 
 	go func() {
 		for {
-			snapshot, err := BuildDirectorySnapshot(fsys, cfg.IgnorePatterns)
+			snapshot, err := BuildDirectorySnapshot(fsys, cfg.Matcher)
 			if err != nil {
 				if cfg.MaxStaleness != 0 && time.Now().After(lastSuccessfulRebuild.Add(cfg.MaxStaleness)) {
 					cancel(fmt.Errorf("no successful rebuild for %v: %w", cfg.MaxStaleness, err))
@@ -252,9 +228,14 @@ func RunFollower(ctx context.Context, fsys fs.FS, logger *log.Logger, cfg Follow
 
 func main() {
 	var leaderCfg LeaderConfig
+	var leaderIgnorePatterns []string
+
 	leaderCmd := flag.NewFlagSet("lead", flag.ExitOnError)
 	leaderCmd.IntVar(&leaderCfg.Port, "port", DefaultPort, "The port the leader serves its updates on.")
-	leaderIgnorePatterns := leaderCmd.String("ignore", "", "The patterns of files that shall be ignored by the leader.")
+	leaderCmd.Func("ignore", "The patterns of files that shall be ignored by the leader (repeatable).", func(p string) error {
+		leaderIgnorePatterns = append(leaderIgnorePatterns, p)
+		return nil
+	})
 	leaderCmd.DurationVar(&leaderCfg.Interval, "interval", DefaultInterval, "How often the leader rebuilds its snapshot (e.g. 500ms, 30s, 1m).")
 	leaderCmd.DurationVar(&leaderCfg.MaxStaleness, "max-staleness", DefaultMaxStaleness, "How long rebuilds may fail before exiting (e.g. 500ms, 30s, 1m). 0 disables this.")
 
@@ -280,11 +261,11 @@ func main() {
 		leaderCmd.Parse(os.Args[2:])
 		logger := log.New(os.Stderr, "leader: ", 0)
 
-		ignorePatterns, err := parseIgnorePatterns(*leaderIgnorePatterns)
+		matcher, err := NewMatcher(leaderIgnorePatterns)
 		if err != nil {
 			logger.Fatalf("%v", err)
 		}
-		leaderCfg.IgnorePatterns = ignorePatterns
+		leaderCfg.Matcher = matcher
 
 		if err := RunLeader(ctx, os.DirFS("."), logger, leaderCfg); err != nil {
 			logger.Fatalf("%v", err)
