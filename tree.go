@@ -308,8 +308,11 @@ func buildDir(fsys fs.FS, dir string, matcher *Matcher) (*Snapshot, error) {
 			children = append(children, &FileNode{Name: filename, Mode: RegularNode, Hash: hash})
 			blobs[hash] = content
 
-		// TODO: the matcher may exclude a path that a valid symlink points at,
-		// leaving the link dangling on the followers, so resolve this situation.
+		// A link is kept even if the matcher excludes its target, so it dangles
+		// on the followers. That's what git and rsync do too, and the link
+		// itself matched no pattern. Skipping it would make one entry depend on
+		// another path's exclusion, with parent directories and link chains to
+		// resolve, only to avoid a dangling link that leaks no content.
 		case filetype&fs.ModeSymlink != 0:
 			target, err := fs.ReadLink(fsys, childPath)
 			if err != nil {
