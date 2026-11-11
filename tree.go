@@ -267,9 +267,11 @@ func buildDir(fsys fs.FS, dir string, matcher *Matcher) (*Snapshot, error) {
 		filetype := entry.Type()
 		childPath := path.Join(dir, filename)
 
-		// TODO: a pattern like "abc/**" excludes everything inside abc but not abc
-		// itself, so followers end up with an empty abc directory. Git never
-		// notices, since it doesn't track empty directories.
+		// A trailing "/**" excludes everything inside a directory but not the
+		// directory itself, so "abc/**" leaves an empty abc on the followers.
+		// git matches the same way and just never shows it, since it doesn't
+		// track directories. Excluding abc too would stop "!abc/**/" from
+		// re-including anything inside it, and "abc/" already excludes all of it.
 		if matcher.Excludes(childPath, filetype.IsDir()) {
 			continue
 		}
