@@ -138,7 +138,7 @@ func diffDir(local *FileNode, remote *FileNode, prefix string) []DiffAction {
 				// file on the follower, Diff would produce two renames for that file. However,
 				// the second rename will fail because the local file was already renamed.
 				// In this case, skip it and create it instead.
-				// TODO: enhance the leader to not fetch the file content
+				// TODO: enhance the follower to not fetch the file content
 				// again, as it is already available. However, the logic for this
 				// does not belong here.
 				if used[lc.Name] {
