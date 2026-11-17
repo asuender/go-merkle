@@ -97,6 +97,7 @@ func (l *leader) handleTree(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache")
 	w.Write(js)
 }
 
@@ -118,6 +119,10 @@ func (l *leader) handleBlob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/octet-stream")
+	// Blobs are immutable content, which means that the slightest change
+	// of the data on disk will produce a new one; these semantics
+	// make a good candidate for using "Cache-Control: immutable".
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	w.Write(blob)
 }
 
