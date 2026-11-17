@@ -134,6 +134,17 @@ func diffDir(local *FileNode, remote *FileNode, prefix string) []DiffAction {
 					continue
 				}
 
+				// When the leader sends to new files whose content matches a single deleted
+				// file on the follower, Diff would produce two renames for that file. However,
+				// the second rename will fail because the local file was already renamed.
+				// In this case, skip it and create it instead.
+				// TODO: enhance the leader to not fetch the file content
+				// again, as it is already available. However, the logic for this
+				// does not belong here.
+				if used[lc.Name] {
+					continue
+				}
+
 				// both hash and mode are equal: avoid accidentally
 				// flagging to rename a different file that also
 				// exists on the remote

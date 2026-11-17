@@ -86,6 +86,7 @@ func (l *leader) handleTree(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("ETag", etag)
 
 	if r.Header.Get("If-None-Match") == etag {
+		w.Header().Set("Cache-Control", "no-cache")
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}

@@ -166,6 +166,17 @@ func TestDiff(t *testing.T) {
 			},
 		},
 		{
+			// a source can only be moved once, since it no longer exists
+			// on the follower after the first rename
+			name:   "rename and copy from one source",
+			local:  dir("root", file("old", 1)),
+			remote: dir("root", file("x", 1), file("y", 1)),
+			want: []DiffAction{
+				renameAction("old", "x", RegularNode, file("old", 1).Hash),
+				createAction("y", RegularNode, file("y", 1).Hash),
+			},
+		},
+		{
 			name:   "moved file with new content",
 			local:  dir("root", file("old", 1)),
 			remote: dir("root", file("new", 2)),
