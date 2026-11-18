@@ -71,7 +71,7 @@ func TestBuildDirectorySnapshotKeepsSymlinkInsideRoot(t *testing.T) {
 
 	snapshot := mustSnapshot(t, fsys, nil)
 
-	// sha256(byte(SymlinkNode) || "a.txt"), computed independently with shasum
+	// The hash is sha256(byte(SymlinkNode) || "a.txt"), computed independently with shasum.
 	var wantHash Hash
 	hex.Decode(wantHash[:], []byte("df8c7059061541560a9bf5320546d5937432ad53293bdcb45f47917529f04eb1"))
 

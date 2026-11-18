@@ -133,7 +133,7 @@ func diffDir(local *FileNode, remote *FileNode, prefix string) []DiffAction {
 					continue
 				}
 
-				// When the leader sends to new files whose content matches a single deleted
+				// When the leader sends two new files whose content matches a single deleted
 				// file on the follower, Diff would produce two renames for that file. However,
 				// the second rename will fail because the local file was already renamed.
 				// In this case, skip it and create it instead.
@@ -144,11 +144,11 @@ func diffDir(local *FileNode, remote *FileNode, prefix string) []DiffAction {
 					continue
 				}
 
-				// both hash and mode are equal: avoid accidentally
-				// flagging to rename a different file that also
-				// exists on the remote
-				// this will be important to enable copying a file
-				// without removing it, hence keeping the same hash
+				// Both hash and mode are equal, so avoid accidentally
+				// flagging a different file that also exists on the
+				// remote for renaming. This will be important to enable
+				// copying a file without removing it, hence keeping
+				// the same hash.
 				if _, found := remoteByName[lc.Name]; !found {
 					actions = append(actions, DiffAction{Kind: ActionKindRename, From: path.Join(prefix, lc.Name), Change: FileNodeChange{Path: fullPath, Mode: r.Mode, Hash: r.Hash}})
 					used[lc.Name] = true
@@ -165,8 +165,8 @@ func diffDir(local *FileNode, remote *FileNode, prefix string) []DiffAction {
 
 	for _, l := range local.Children {
 		_, found := remoteByName[l.Name]
-		// if l.Name was not flagged before, `used[l.Name]` will return the zero value
-		// (false), making this faster than a traditional array lookup
+		// If l.Name was not flagged before, `used[l.Name]` will return the zero value
+		// (false), making this faster than a traditional array lookup.
 		if used[l.Name] || found {
 			continue
 		}

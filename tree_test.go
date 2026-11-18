@@ -166,8 +166,8 @@ func TestDiff(t *testing.T) {
 			},
 		},
 		{
-			// a source can only be moved once, since it no longer exists
-			// on the follower after the first rename
+			// A source can only be moved once, since it no longer exists
+			// on the follower after the first rename.
 			name:   "rename and copy from one source",
 			local:  dir("root", file("old", 1)),
 			remote: dir("root", file("x", 1), file("y", 1)),

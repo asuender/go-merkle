@@ -57,8 +57,8 @@ func startLeader(t *testing.T, fsys fs.FS, interval, maxStaleness time.Duration)
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 
-	// the leader may still log after the test has finished,
-	// which rules out t.Output()
+	// The leader may still log after the test has finished,
+	// which rules out t.Output().
 	logger := log.New(io.Discard, "", 0)
 
 	errc := make(chan error, 1)
@@ -95,7 +95,7 @@ func TestRunLeaderExitsWhenRebuildsFailPastMaxStaleness(t *testing.T) {
 	const interval, maxStaleness = 10 * time.Millisecond, 100 * time.Millisecond
 
 	fsys := newFlakyFS()
-	// taken before the initial build, so it bounds the last success from below
+	// The start is taken before the initial build, so it bounds the last success from below.
 	start := time.Now()
 	_, errc := startLeader(t, fsys, interval, maxStaleness)
 	<-fsys.opened
@@ -117,8 +117,8 @@ func TestRunLeaderToleratesFailureStreaksShorterThanMaxStaleness(t *testing.T) {
 	cancel, errc := startLeader(t, fsys, interval, maxStaleness)
 	<-fsys.opened
 
-	// failures add up to more than maxStaleness, but each streak alone stays
-	// below it, so only a leader resetting on success survives
+	// Failures add up to more than maxStaleness, but each streak alone stays
+	// below it, so only a leader resetting on success survives.
 	for range 2 {
 		fsys.failing.Store(true)
 		time.Sleep(120 * time.Millisecond)
@@ -173,8 +173,8 @@ func getBlob(l *leader, hash Hash) *httptest.ResponseRecorder {
 
 func getRawBlob(l *leader, raw string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodGet, "/blobs/"+raw, nil)
-	// handlers are called directly rather than through the leader's mux,
-	// so the path value has to be set by hand
+	// Handlers are called directly rather than through the leader's mux,
+	// so the path value has to be set by hand.
 	req.SetPathValue("hash", raw)
 	rec := httptest.NewRecorder()
 	l.handleBlob(rec, req)
@@ -255,8 +255,8 @@ func TestHandleBlobMarksOnlyFoundBlobsImmutable(t *testing.T) {
 		t.Fatalf("got Cache-Control %q for existing blob, want immutable with max-age", found.Header().Get("Cache-Control"))
 	}
 
-	// a blob missing now may be added by a later rebuild,
-	// so caching the 404 for long would hide it
+	// A blob missing now may be added by a later rebuild,
+	// so caching the 404 for long would hide it.
 	missing := getBlob(l, sha256.Sum256([]byte("not in snapshot")))
 	if missing.Code != http.StatusNotFound {
 		t.Fatalf("got status %d for missing blob, want %d", missing.Code, http.StatusNotFound)
@@ -280,8 +280,8 @@ func TestHandleTreeRoundTripsJSON(t *testing.T) {
 		t.Fatalf("got Content-Type %q, want application/json", got)
 	}
 
-	// the follower rebuilds its view of the leader from this alone,
-	// so anything lost in encoding would surface as a bogus diff
+	// The follower rebuilds its view of the leader from this alone,
+	// so anything lost in encoding would surface as a bogus diff.
 	var got FileNode
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decoding tree: %v", err)

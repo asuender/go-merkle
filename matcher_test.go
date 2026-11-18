@@ -398,7 +398,7 @@ var excludeTests = []struct {
 		},
 	},
 	{
-		// buildDir passes symlinks as non-directories, as git does, so a
+		// As in git, buildDir passes symlinks as non-directories, so a
 		// directory-only pattern never matches a link, whatever it points at.
 		name:     "trailing slash ignores symlinks",
 		patterns: []string{"link/"},
@@ -486,7 +486,7 @@ func TestBuildDirectorySnapshotSkipsIgnoredSubDirectory(t *testing.T) {
 		"a/b/kept":               &fstest.MapFile{Data: []byte("kept")},
 	}
 
-	// git can't re-include a file whose parent directory is excluded, and
+	// Git can't re-include a file whose parent directory is excluded, and
 	// neither can buildDir, since it never reads an excluded directory.
 	got := snapshotPaths(t, fsys, "ignored-dir/", "!ignored-dir/foo")
 	want := []string{"a", "a/b", "a/b/kept"}

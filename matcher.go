@@ -232,7 +232,7 @@ func wildmatch(pattern, text string) bool {
 						return true
 					}
 
-					// We now safely detected '**/'
+					// We now safely detected '**/'.
 					dirPx = px
 					px = end + 1
 					dirNx = nx
@@ -381,7 +381,7 @@ func inClass(name string, c byte) (member, known bool) {
 	case "punct":
 		return graph && !lower && !upper && !digit, true
 	case "space":
-		// git's own ctype table leaves out \v and \f, unlike POSIX.
+		// Git's own ctype table leaves out \v and \f, unlike POSIX.
 		return c == ' ' || c == '\t' || c == '\n' || c == '\r', true
 	case "upper":
 		return upper, true

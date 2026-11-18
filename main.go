@@ -80,9 +80,9 @@ func (l *leader) handleTree(w http.ResponseWriter, r *http.Request) {
 	snapshot := l.snapshot.Load()
 
 	etag := fmt.Sprintf(`"%x"`, snapshot.root.Hash)
-	// technically, we do not need to send an ETag header on every response,
+	// Technically, we do not need to send an ETag header on every response,
 	// but standard HTTP clients use it (even when responding with 304)
-	// to confirm that the stored copy is still current
+	// to confirm that the stored copy is still current.
 	w.Header().Set("ETag", etag)
 
 	if r.Header.Get("If-None-Match") == etag {
@@ -134,9 +134,9 @@ func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, cfg LeaderCo
 		return err
 	}
 
-	// we build the snapshot before starting the server
+	// We build the snapshot before starting the server
 	// to avoid requests returning nil if the initial snapshot
-	// hasn't been stored yet
+	// hasn't been stored yet.
 	initialSnapshot, err := BuildDirectorySnapshot(fsys, cfg.Matcher)
 	if err != nil {
 		return err
@@ -158,8 +158,8 @@ func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, cfg LeaderCo
 		Handler: mux,
 	}
 
-	// if any errors occur while inside [http.Serve], the main approaches
-	// would have no chance of exiting due to the line `<-ctx.Done()`
+	// If any errors occur while inside [http.Serve], the main approaches
+	// would have no chance of exiting due to the line `<-ctx.Done()`.
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 
@@ -190,7 +190,7 @@ func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, cfg LeaderCo
 	}()
 
 	// Binding the port before actually serving HTTP endpoints
-	// helps failing fast and avoids misleading logging
+	// helps failing fast and avoids misleading logging.
 	ln, err := net.Listen("tcp", srv.Addr)
 	if err != nil {
 		return err
@@ -261,7 +261,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	// we need to stop() immediately after cancelling ctx as any further interrupts
+	// We need to stop() immediately after cancelling ctx as any further interrupts
 	// after the first SIGTERM/SIGINT will be swallowed.
 	context.AfterFunc(ctx, stop)
 
