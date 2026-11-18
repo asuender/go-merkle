@@ -165,6 +165,15 @@ func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, cfg LeaderCo
 
 	go func() {
 		for {
+			// An initial snapshot was already created before the loop,
+			// so we wait first instead of building the second one
+			// almost instantly.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(cfg.Interval):
+			}
+
 			snapshot, err := BuildDirectorySnapshot(fsys, cfg.Matcher)
 			if err != nil {
 				if cfg.MaxStaleness != 0 && time.Now().After(lastSuccessfulRebuild.Add(cfg.MaxStaleness)) {
@@ -176,12 +185,6 @@ func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, cfg LeaderCo
 			} else {
 				l.snapshot.Store(snapshot)
 				lastSuccessfulRebuild = time.Now()
-			}
-
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(cfg.Interval):
 			}
 		}
 	}()
