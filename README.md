@@ -58,7 +58,7 @@ The planned replication flow is:
 4. If the root hash differs, the follower diffs the two trees and skips every subtree whose hash matches.
 5. The follower requests the contents it doesn't have, then applies the creates, replacements, renames and deletes.
 
-Trees are sent as JSON with hex-encoded hashes, and file contents will be sent separately.
+`GET /tree` serves the tree as JSON with hex-encoded hashes, and `GET /blobs/{hash}` serves the raw contents for a hash.
 
 ## Limitations
 

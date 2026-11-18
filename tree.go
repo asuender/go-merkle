@@ -14,7 +14,7 @@ import (
 type FileNodeType int
 
 // Note: add new node types only at the end here. Otherwise,
-// compatability could be broken when reading older file modes.
+// compatibility could be broken when reading older file modes.
 const (
 	UnknownNode FileNodeType = iota
 	DirectoryNode

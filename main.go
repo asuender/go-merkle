@@ -72,7 +72,7 @@ type FollowerConfig struct {
 type leader struct {
 	// snapshot is replaced as a whole on every rebuild and never mutated
 	// after Store, so handlers can read it without locking.
-	// Other approaches like using [sync.RWMutex] are also valid
+	// Other approaches like using [sync.RWMutex] are also valid.
 	snapshot atomic.Pointer[Snapshot]
 }
 
