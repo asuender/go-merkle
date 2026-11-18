@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"maps"
 	"path"
-	"path/filepath"
 	"strings"
 )
 
@@ -111,20 +110,20 @@ func diffDir(local *FileNode, remote *FileNode, prefix string) []DiffAction {
 	used := make(map[string]bool)
 
 	for _, r := range remote.Children {
-		path := filepath.Join(prefix, r.Name)
+		fullPath := path.Join(prefix, r.Name)
 		l, found := localByName[r.Name]
 
 		if found {
 			switch {
 			case l.Mode != r.Mode:
-				actions = append(actions, deleteSubtree(l, path)...)
-				actions = append(actions, createSubtree(r, path)...)
+				actions = append(actions, deleteSubtree(l, fullPath)...)
+				actions = append(actions, createSubtree(r, fullPath)...)
 
 			case l.Mode == DirectoryNode && r.Mode == DirectoryNode:
-				actions = append(actions, diffDir(l, r, path)...)
+				actions = append(actions, diffDir(l, r, fullPath)...)
 
 			case l.Hash != r.Hash:
-				actions = append(actions, DiffAction{Kind: ActionKindReplace, Change: FileNodeChange{Path: path, Mode: r.Mode, Hash: r.Hash}})
+				actions = append(actions, DiffAction{Kind: ActionKindReplace, Change: FileNodeChange{Path: fullPath, Mode: r.Mode, Hash: r.Hash}})
 			}
 		} else {
 			wasRename := false
@@ -151,7 +150,7 @@ func diffDir(local *FileNode, remote *FileNode, prefix string) []DiffAction {
 				// this will be important to enable copying a file
 				// without removing it, hence keeping the same hash
 				if _, found := remoteByName[lc.Name]; !found {
-					actions = append(actions, DiffAction{Kind: ActionKindRename, From: filepath.Join(prefix, lc.Name), Change: FileNodeChange{Path: path, Mode: r.Mode, Hash: r.Hash}})
+					actions = append(actions, DiffAction{Kind: ActionKindRename, From: path.Join(prefix, lc.Name), Change: FileNodeChange{Path: fullPath, Mode: r.Mode, Hash: r.Hash}})
 					used[lc.Name] = true
 					wasRename = true
 					break
@@ -159,7 +158,7 @@ func diffDir(local *FileNode, remote *FileNode, prefix string) []DiffAction {
 			}
 
 			if !wasRename {
-				actions = append(actions, createSubtree(r, path)...)
+				actions = append(actions, createSubtree(r, fullPath)...)
 			}
 		}
 	}
@@ -172,16 +171,16 @@ func diffDir(local *FileNode, remote *FileNode, prefix string) []DiffAction {
 			continue
 		}
 
-		actions = append(actions, deleteSubtree(l, filepath.Join(prefix, l.Name))...)
+		actions = append(actions, deleteSubtree(l, path.Join(prefix, l.Name))...)
 	}
 
 	return actions
 }
 
-func createSubtree(node *FileNode, path string) []DiffAction {
+func createSubtree(node *FileNode, fullPath string) []DiffAction {
 	actions := []DiffAction{{
 		Kind:   ActionKindCreate,
-		Change: FileNodeChange{Path: path, Mode: node.Mode, Hash: node.Hash},
+		Change: FileNodeChange{Path: fullPath, Mode: node.Mode, Hash: node.Hash},
 	}}
 
 	if node.Mode != DirectoryNode {
@@ -189,22 +188,22 @@ func createSubtree(node *FileNode, path string) []DiffAction {
 	}
 
 	for _, c := range node.Children {
-		actions = append(actions, createSubtree(c, filepath.Join(path, c.Name))...)
+		actions = append(actions, createSubtree(c, path.Join(fullPath, c.Name))...)
 	}
 
 	return actions
 }
 
-func deleteSubtree(node *FileNode, path string) []DiffAction {
+func deleteSubtree(node *FileNode, fullPath string) []DiffAction {
 	var actions []DiffAction
 
 	if node.Mode == DirectoryNode {
 		for _, c := range node.Children {
-			actions = append(actions, deleteSubtree(c, filepath.Join(path, c.Name))...)
+			actions = append(actions, deleteSubtree(c, path.Join(fullPath, c.Name))...)
 		}
 	}
 
-	actions = append(actions, DiffAction{Kind: ActionKindDelete, Change: FileNodeChange{Path: path}})
+	actions = append(actions, DiffAction{Kind: ActionKindDelete, Change: FileNodeChange{Path: fullPath}})
 	return actions
 }
 

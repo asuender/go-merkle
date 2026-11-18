@@ -2,7 +2,6 @@ package main
 
 import (
 	"io/fs"
-	"path/filepath"
 	"slices"
 	"testing"
 	"testing/fstest"
@@ -526,7 +525,7 @@ func snapshotPaths(t *testing.T, fsys fs.FS, patterns ...string) []string {
 
 	var paths []string
 	for p := range collect(snapshot.root) {
-		paths = append(paths, filepath.ToSlash(p))
+		paths = append(paths, p)
 	}
 	slices.Sort(paths)
 	return paths

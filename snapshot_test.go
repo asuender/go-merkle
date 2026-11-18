@@ -4,7 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io/fs"
-	"path/filepath"
+	"path"
 	"testing"
 	"testing/fstest"
 
@@ -30,7 +30,7 @@ func TestSnapshotDiff(t *testing.T) {
 	remoteFS["a/b.txt"].Data = []byte("two")
 	remote = mustSnapshot(t, remoteFS, nil)
 	replaced := child(t, remote.root, "a", "b.txt")
-	want := []DiffAction{replaceAction(filepath.Join("a", "b.txt"), replaced.Hash)}
+	want := []DiffAction{replaceAction(path.Join("a", "b.txt"), replaced.Hash)}
 	if diff := cmp.Diff(want, local.root.Diff(remote.root), diffOpts...); diff != "" {
 		t.Fatalf("content edit mismatch (-want +got):\n%s", diff)
 	}
@@ -39,7 +39,7 @@ func TestSnapshotDiff(t *testing.T) {
 	remote = mustSnapshot(t, remoteFS, nil)
 	replaced = child(t, remote.root, "a", "b.txt")
 	want = []DiffAction{
-		replaceAction(filepath.Join("a", "b.txt"), replaced.Hash),
+		replaceAction(path.Join("a", "b.txt"), replaced.Hash),
 		deleteAction("c.txt"),
 	}
 	if diff := cmp.Diff(want, local.root.Diff(remote.root), diffOpts...); diff != "" {
@@ -54,7 +54,7 @@ func TestSnapshotDiff(t *testing.T) {
 	added := child(t, remote.root, "extra.txt")
 	replaced = child(t, remote.root, "a", "b.txt")
 	want = []DiffAction{
-		replaceAction(filepath.Join("a", "b.txt"), replaced.Hash),
+		replaceAction(path.Join("a", "b.txt"), replaced.Hash),
 		createAction("extra.txt", RegularNode, added.Hash),
 		deleteAction("c.txt"),
 	}

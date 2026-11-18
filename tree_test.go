@@ -2,7 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
-	"path/filepath"
+	"path"
 	"sort"
 	"testing"
 
@@ -128,7 +128,7 @@ func TestDiff(t *testing.T) {
 			remote: dir("root", dir("d", nested)),
 			want: []DiffAction{
 				createAction("d", DirectoryNode, dir("d", nested).Hash),
-				createAction(filepath.Join("d", "e"), RegularNode, nested.Hash),
+				createAction(path.Join("d", "e"), RegularNode, nested.Hash),
 			},
 		},
 		{
@@ -136,8 +136,8 @@ func TestDiff(t *testing.T) {
 			local:  dir("root", dir("d", nested, otherNested)),
 			remote: dir("root"),
 			want: []DiffAction{
-				deleteAction(filepath.Join("d", "e")),
-				deleteAction(filepath.Join("d", "f")),
+				deleteAction(path.Join("d", "e")),
+				deleteAction(path.Join("d", "f")),
 				deleteAction("d"),
 			},
 		},
@@ -192,7 +192,7 @@ func TestDiff(t *testing.T) {
 			want: []DiffAction{
 				deleteAction("x"),
 				createAction("x", DirectoryNode, dir("x", file("y", 2)).Hash),
-				createAction(filepath.Join("x", "y"), RegularNode, file("y", 2).Hash),
+				createAction(path.Join("x", "y"), RegularNode, file("y", 2).Hash),
 			},
 		},
 		{
@@ -200,7 +200,7 @@ func TestDiff(t *testing.T) {
 			local:  dir("root", dir("x", file("y", 1))),
 			remote: dir("root", file("x", 2)),
 			want: []DiffAction{
-				deleteAction(filepath.Join("x", "y")),
+				deleteAction(path.Join("x", "y")),
 				deleteAction("x"),
 				createAction("x", RegularNode, file("x", 2).Hash),
 			},
@@ -334,9 +334,9 @@ func collect(root *FileNode) map[string]*FileNode {
 	var walk func(*FileNode, string)
 	walk = func(node *FileNode, prefix string) {
 		for _, child := range node.Children {
-			path := filepath.Join(prefix, child.Name)
-			nodes[path] = child
-			walk(child, path)
+			fullPath := path.Join(prefix, child.Name)
+			nodes[fullPath] = child
+			walk(child, fullPath)
 		}
 	}
 	walk(root, "")
