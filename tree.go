@@ -2,45 +2,67 @@ package main
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"maps"
 	"path"
-	"path/filepath"
-	"regexp"
 	"strings"
 )
 
 type FileNodeType int
 
+// Note: add new node types only at the end here. Otherwise,
+// compatibility could be broken when reading older file modes.
 const (
 	UnknownNode FileNodeType = iota
 	DirectoryNode
 	RegularNode
+	SymlinkNode
 )
+
+// A Hash is a SHA-256 digest. It implements [encoding.TextMarshaler] and
+// [encoding.TextUnmarshaler], so JSON represents it as a hex string.
+// This is due to the fact that the [json] package treats fixed-sized
+// arrays and slices differently.
+type Hash [32]byte
+
+func (h Hash) MarshalText() ([]byte, error) {
+	return []byte(hex.EncodeToString(h[:])), nil
+}
+
+func (h *Hash) UnmarshalText(b []byte) error {
+	if len(b) != hex.EncodedLen(len(h)) {
+		return fmt.Errorf("invalid hash length: %d", len(b))
+	}
+
+	_, err := hex.Decode(h[:], b)
+	return err
+}
 
 // A Snapshot represents one specific Merkle tree state
 // by holding the root node and all file contents of the
 // underlying tree.
 type Snapshot struct {
 	root  *FileNode
-	blobs map[[32]byte][]byte
+	blobs map[Hash][]byte
 }
 
 // A FileNode represents an individual node inside a Merkle tree.
 type FileNode struct {
-	name     string
-	mode     FileNodeType
-	hash     [32]byte
-	children []*FileNode
+	Name     string       `json:"name"`
+	Mode     FileNodeType `json:"mode"`
+	Hash     Hash         `json:"hash"`
+	Children []*FileNode  `json:"children,omitempty"`
 }
 
 // A FileNodeChange holds the necessary information needed by the followers
 // to perform the necessary I/O operations after the diff.
 type FileNodeChange struct {
-	path string
-	mode FileNodeType
-	hash [32]byte
+	Path string       `json:"path"`
+	Mode FileNodeType `json:"mode"`
+	Hash Hash         `json:"hash"`
 }
 
 type ActionKind int
@@ -55,11 +77,11 @@ const (
 
 // A DiffAction represents one single I/O action (creation, modification, deletion, or rename)
 // as a result of making a diff between two Merkle trees.
-// For a rename, from is the existing path and change.path is the destination.
+// For a rename, from is the existing path and change.Path is the destination.
 type DiffAction struct {
-	kind   ActionKind
-	from   string
-	change FileNodeChange
+	Kind   ActionKind
+	From   string
+	Change FileNodeChange
 }
 
 // Diff compares remote to n and returns a slice of DiffAction
@@ -70,107 +92,118 @@ func (n *FileNode) Diff(remote *FileNode) []DiffAction {
 }
 
 func diffDir(local *FileNode, remote *FileNode, prefix string) []DiffAction {
-	if local.hash == remote.hash {
+	if local.Hash == remote.Hash {
 		return nil
 	}
 
 	localByName := make(map[string]*FileNode)
 	remoteByName := make(map[string]*FileNode)
 
-	for _, c := range local.children {
-		localByName[c.name] = c
+	for _, c := range local.Children {
+		localByName[c.Name] = c
 	}
-	for _, c := range remote.children {
-		remoteByName[c.name] = c
+	for _, c := range remote.Children {
+		remoteByName[c.Name] = c
 	}
 
 	var actions []DiffAction
 	used := make(map[string]bool)
 
-	for _, r := range remote.children {
-		path := filepath.Join(prefix, r.name)
-		l, found := localByName[r.name]
+	for _, r := range remote.Children {
+		fullPath := path.Join(prefix, r.Name)
+		l, found := localByName[r.Name]
 
 		if found {
 			switch {
-			case l.mode != r.mode:
-				actions = append(actions, deleteSubtree(l, path)...)
-				actions = append(actions, createSubtree(r, path)...)
+			case l.Mode != r.Mode:
+				actions = append(actions, deleteSubtree(l, fullPath)...)
+				actions = append(actions, createSubtree(r, fullPath)...)
 
-			case l.mode == DirectoryNode && r.mode == DirectoryNode:
-				actions = append(actions, diffDir(l, r, path)...)
+			case l.Mode == DirectoryNode && r.Mode == DirectoryNode:
+				actions = append(actions, diffDir(l, r, fullPath)...)
 
-			case l.hash != r.hash:
-				actions = append(actions, DiffAction{kind: ActionKindReplace, change: FileNodeChange{path: path, mode: RegularNode, hash: r.hash}})
+			case l.Hash != r.Hash:
+				actions = append(actions, DiffAction{Kind: ActionKindReplace, Change: FileNodeChange{Path: fullPath, Mode: r.Mode, Hash: r.Hash}})
 			}
 		} else {
 			wasRename := false
 
-			for _, lc := range local.children {
-				if lc.hash != r.hash || lc.mode != r.mode {
+			for _, lc := range local.Children {
+				if lc.Hash != r.Hash || lc.Mode != r.Mode {
 					continue
 				}
 
-				// both hash and mode are equal: avoid accidentally
-				// flagging to rename a different file that also
-				// exists on the remote
-				// this will be important to enable copying a file
-				// without removing it, hence keeping the same hash
-				if _, found := remoteByName[lc.name]; !found {
-					actions = append(actions, DiffAction{kind: ActionKindRename, from: filepath.Join(prefix, lc.name), change: FileNodeChange{path: path, mode: r.mode, hash: r.hash}})
-					used[lc.name] = true
+				// When the leader sends two new files whose content matches a single deleted
+				// file on the follower, Diff would produce two renames for that file. However,
+				// the second rename will fail because the local file was already renamed.
+				// In this case, skip it and create it instead.
+				// TODO: enhance the follower to not fetch the file content
+				// again, as it is already available. However, the logic for this
+				// does not belong here.
+				if used[lc.Name] {
+					continue
+				}
+
+				// Both hash and mode are equal, so avoid accidentally
+				// flagging a different file that also exists on the
+				// remote for renaming. This will be important to enable
+				// copying a file without removing it, hence keeping
+				// the same hash.
+				if _, found := remoteByName[lc.Name]; !found {
+					actions = append(actions, DiffAction{Kind: ActionKindRename, From: path.Join(prefix, lc.Name), Change: FileNodeChange{Path: fullPath, Mode: r.Mode, Hash: r.Hash}})
+					used[lc.Name] = true
 					wasRename = true
 					break
 				}
 			}
 
 			if !wasRename {
-				actions = append(actions, createSubtree(r, path)...)
+				actions = append(actions, createSubtree(r, fullPath)...)
 			}
 		}
 	}
 
-	for _, l := range local.children {
-		_, found := remoteByName[l.name]
-		// if l.name was not flagged before, `used[l.name]` will return the zero value
-		// (false), making this faster than a traditional array lookup
-		if used[l.name] || found {
+	for _, l := range local.Children {
+		_, found := remoteByName[l.Name]
+		// If l.Name was not flagged before, `used[l.Name]` will return the zero value
+		// (false), making this faster than a traditional array lookup.
+		if used[l.Name] || found {
 			continue
 		}
 
-		actions = append(actions, deleteSubtree(l, filepath.Join(prefix, l.name))...)
+		actions = append(actions, deleteSubtree(l, path.Join(prefix, l.Name))...)
 	}
 
 	return actions
 }
 
-func createSubtree(node *FileNode, path string) []DiffAction {
+func createSubtree(node *FileNode, fullPath string) []DiffAction {
 	actions := []DiffAction{{
-		kind:   ActionKindCreate,
-		change: FileNodeChange{path: path, mode: node.mode, hash: node.hash},
+		Kind:   ActionKindCreate,
+		Change: FileNodeChange{Path: fullPath, Mode: node.Mode, Hash: node.Hash},
 	}}
 
-	if node.mode != DirectoryNode {
+	if node.Mode != DirectoryNode {
 		return actions
 	}
 
-	for _, c := range node.children {
-		actions = append(actions, createSubtree(c, filepath.Join(path, c.name))...)
+	for _, c := range node.Children {
+		actions = append(actions, createSubtree(c, path.Join(fullPath, c.Name))...)
 	}
 
 	return actions
 }
 
-func deleteSubtree(node *FileNode, path string) []DiffAction {
+func deleteSubtree(node *FileNode, fullPath string) []DiffAction {
 	var actions []DiffAction
 
-	if node.mode == DirectoryNode {
-		for _, c := range node.children {
-			actions = append(actions, deleteSubtree(c, filepath.Join(path, c.name))...)
+	if node.Mode == DirectoryNode {
+		for _, c := range node.Children {
+			actions = append(actions, deleteSubtree(c, path.Join(fullPath, c.Name))...)
 		}
 	}
 
-	actions = append(actions, DiffAction{kind: ActionKindDelete, change: FileNodeChange{path: path}})
+	actions = append(actions, DiffAction{Kind: ActionKindDelete, Change: FileNodeChange{Path: fullPath}})
 	return actions
 }
 
@@ -186,7 +219,7 @@ func (n *FileNode) Flatten() []*FileNode {
 		node := stack[last]
 		stack = stack[:last]
 
-		for _, c := range node.children {
+		for _, c := range node.Children {
 			stack = append(stack, c)
 		}
 
@@ -197,13 +230,13 @@ func (n *FileNode) Flatten() []*FileNode {
 }
 
 // String returns a string representation of n,
-// currently listing all the nodes in a Preorder
+// currently listing all the nodes in a preorder
 // fashion, separated by newlines.
 func (n *FileNode) String() string {
 	names := []string{}
 
 	for _, node := range n.Flatten() {
-		names = append(names, node.name)
+		names = append(names, node.Name)
 	}
 
 	return strings.Join(names, "\n")
@@ -211,43 +244,57 @@ func (n *FileNode) String() string {
 
 // BuildDirectorySnapshot recursively traverses fsys from its root and grows a
 // new snapshot holding a Merkle tree representing the filesystem hierarchy,
-// while excluding those paths that match the patterns in exclude.
+// leaving out every entry that matcher excludes.
 // The root node is named ".".
-func BuildDirectorySnapshot(fsys fs.FS, exclude []*regexp.Regexp) (*Snapshot, error) {
-	return buildDir(fsys, ".", exclude)
+//
+// Symlinks are recorded as links and never followed, so the follower gets the
+// same link rather than a copy of its target. Their blob is the raw target.
+// Links with an absolute target or one resolving outside the root are skipped,
+// since the follower's root lives elsewhere and they would point at something
+// unrelated there.
+//
+// Entries that vanish between being listed and being read are left out,
+// as are file types other than regular files, directories and symlinks.
+// Any other error, such as a permission error, fails the whole build, since
+// leaving an existing entry out would delete it on the followers.
+//
+// fsys must implement [fs.ReadLinkFS] if it contains symlinks.
+func BuildDirectorySnapshot(fsys fs.FS, matcher *Matcher) (*Snapshot, error) {
+	return buildDir(fsys, ".", matcher)
 }
 
-func buildDir(fsys fs.FS, dir string, exclude []*regexp.Regexp) (*Snapshot, error) {
+func buildDir(fsys fs.FS, dir string, matcher *Matcher) (*Snapshot, error) {
 	entries, err := fs.ReadDir(fsys, dir)
 	if err != nil {
 		return nil, fmt.Errorf("read dir %s: %w", dir, err)
 	}
 
 	var children []*FileNode
-	blobs := make(map[[32]byte][]byte)
+	blobs := make(map[Hash][]byte)
 
 	for _, entry := range entries {
 		filename := entry.Name()
 		filetype := entry.Type()
+		childPath := path.Join(dir, filename)
 
-		ignore := false
-		for _, pattern := range exclude {
-			if pattern.MatchString(filename) {
-				ignore = true
-				break
-			}
-		}
-
-		if ignore {
+		// A trailing "/**" excludes everything inside a directory but not the
+		// directory itself, so "abc/**" leaves an empty abc on the followers.
+		// git matches the same way and just never shows it, since it doesn't
+		// track directories. Excluding abc too would stop "!abc/**/" from
+		// re-including anything inside it, and "abc/" already excludes all of it.
+		if matcher.Excludes(childPath, filetype.IsDir()) {
 			continue
 		}
 
-		childPath := path.Join(dir, filename)
-
 		switch {
 		case filetype.IsDir():
-			nested, err := buildDir(fsys, childPath, exclude)
+			nested, err := buildDir(fsys, childPath, matcher)
 			if err != nil {
+				// If the nested subdirectory can't be read, [buildDir] immediately returns
+				// [fs.ErrNotExist], in which case we skip it as we do with other file types.
+				if errors.Is(err, fs.ErrNotExist) {
+					continue
+				}
 				return nil, err
 			}
 
@@ -257,6 +304,9 @@ func buildDir(fsys fs.FS, dir string, exclude []*regexp.Regexp) (*Snapshot, erro
 		case filetype.IsRegular():
 			content, err := fs.ReadFile(fsys, childPath)
 			if err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					continue
+				}
 				return nil, fmt.Errorf("read %s: %w", childPath, err)
 			}
 
@@ -264,14 +314,48 @@ func buildDir(fsys fs.FS, dir string, exclude []*regexp.Regexp) (*Snapshot, erro
 			h.Write([]byte{byte(RegularNode)})
 			h.Write(content)
 
-			var hash [32]byte
+			var hash Hash
 			copy(hash[:], h.Sum(nil))
 
-			children = append(children, &FileNode{name: filename, mode: RegularNode, hash: hash})
+			children = append(children, &FileNode{Name: filename, Mode: RegularNode, Hash: hash})
 			blobs[hash] = content
 
+		// A link is kept even if the matcher excludes its target, so it dangles
+		// on the followers. That's what git and rsync do too, and the link
+		// itself matched no pattern. Skipping it would make one entry depend on
+		// another path's exclusion, with parent directories and link chains to
+		// resolve, only to avoid a dangling link that leaks no content.
+		case filetype&fs.ModeSymlink != 0:
+			target, err := fs.ReadLink(fsys, childPath)
+			if err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					continue
+				}
+				return nil, fmt.Errorf("read symlink %s: %w", childPath, err)
+			}
+
+			// [fs.ValidPath] rejects ".." and leading slashes, so that way,
+			// we can be sure that we neither escape the current directory
+			// nor follow an absolute path.
+			// Joining with dir would hide an absolute target, so we additionally
+			// guard that with [path.IsAbs].
+			cleanedTarget := path.Join(dir, target)
+			if path.IsAbs(target) || !fs.ValidPath(cleanedTarget) {
+				continue
+			}
+
+			h := sha256.New()
+			h.Write([]byte{byte(SymlinkNode)})
+			h.Write([]byte(target))
+
+			var hash Hash
+			copy(hash[:], h.Sum(nil))
+
+			children = append(children, &FileNode{Name: filename, Mode: SymlinkNode, Hash: hash})
+			blobs[hash] = []byte(target)
+
 		default:
-			return nil, fmt.Errorf("path %s is not regular file or directory", childPath)
+			continue
 		}
 	}
 
@@ -279,16 +363,16 @@ func buildDir(fsys fs.FS, dir string, exclude []*regexp.Regexp) (*Snapshot, erro
 	h.Write([]byte{byte(DirectoryNode)})
 
 	for _, c := range children {
-		h.Write([]byte{byte(c.mode)})
-		h.Write([]byte(c.name))
+		h.Write([]byte{byte(c.Mode)})
+		h.Write([]byte(c.Name))
 		h.Write([]byte{0})
-		h.Write(c.hash[:])
+		h.Write(c.Hash[:])
 	}
 
-	var hash [32]byte
+	var hash Hash
 	copy(hash[:], h.Sum(nil))
 
-	root := &FileNode{name: path.Base(dir), mode: DirectoryNode, hash: hash, children: children}
+	root := &FileNode{Name: path.Base(dir), Mode: DirectoryNode, Hash: hash, Children: children}
 	snapshot := &Snapshot{root: root, blobs: blobs}
 
 	return snapshot, nil

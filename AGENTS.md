@@ -7,3 +7,19 @@ Read the (root project!) README file.
 This is a learning project for exploring the technologies used here, just so you know.
 
 If you happen to change something in the codebase which leads to information in [this file](./AGENTS.md) to become stale, update [it](./AGENTS.md).
+
+## Git
+
+Commit to the `dev` branch. `dev` is squash-merged into `main` on GitHub on a regular basis, so don't commit to `main` directly.
+
+## Comments
+
+Follow the [Go doc comment style](https://go.dev/doc/comment).
+
+Line comments inside function bodies are whole sentences: they start with an uppercase letter and end with a period. Doc comments and established markers like `TODO:` follow their Go conventions instead.
+
+Comments explain *why* something exists: intent, constraints and non-obvious trade-offs. Don't restate what the code or signature already says. Some existing comments in the codebase do this, so don't use them as a model. However, opinions are okay. Good code is often times opinionated code.
+
+## Other
+
+- [`ARCHITECTURE.md`](./ARCHITECTURE.md) is an old file describing the intended behavior of the tool. Keep it untracked and do not reference it somewhere. Actual implementation will likely drift, but that's okay.
