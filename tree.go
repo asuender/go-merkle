@@ -230,7 +230,7 @@ func (n *FileNode) Flatten() []*FileNode {
 }
 
 // String returns a string representation of n,
-// currently listing all the nodes in a postorder (i.e. reversed)
+// currently listing all the nodes in a preorder
 // fashion, separated by newlines.
 func (n *FileNode) String() string {
 	names := []string{}

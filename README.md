@@ -36,16 +36,13 @@ go-merkle follow --host 127.0.0.1 --port 8000
 | `follow` | `--host`          | `127.0.0.1` | Leader host                                  |
 | `follow` | `--port`          | `8000`      | Leader port                                  |
 
-`--ignore` takes one pattern per flag, so pass it once for every pattern: `--ignore '*.tmp' --ignore '/build/'`.
-Patterns follow the [gitignore](https://git-scm.com/docs/gitignore#_pattern_format) syntax and are matched against paths relative to the replicated directory: a pattern without a slash matches a name at any depth, one with a slash is anchored to the root, a trailing slash matches only directories, `**` spans directories, and a leading `!` re-includes what an earlier pattern excluded. The last matching pattern wins.
-An ignored directory is skipped with everything inside it, so nothing below it can be re-included.
-Comments, blank lines and the trailing-whitespace rules don't apply, since patterns come from flags rather than a file.
+`--ignore` can be repeated to pass multiple patterns (e.g. `--ignore '*.tmp' --ignore '/build/'`). They follow the [gitignore](https://git-scm.com/docs/gitignore#_pattern_format) syntax relative to the replicated directory. A pattern without a slash matches a name at any depth, those with a leading slash are anchored to the root. **Note**: A trailing `/**` only matches content _inside_ a directory, which means that `abc/**` would replicate an _empty_ directory.
 
 `--interval` takes a Go duration such as `500ms`, `30s` or `1m`, and must be positive.
 The wait starts after each rebuild finishes, so rebuilds never overlap.
 
 `--max-staleness` makes the leader exit once no rebuild has succeeded for that long, so a supervisor can restart it instead of followers silently receiving outdated files.
-It is checked after each failed rebuild, so the actual exit happens up to one interval later. `0` disables it; negative values are rejected.
+It is checked after each failed rebuild, so the actual exit happens up to one interval later. `0` disables it.
 
 ## How it works
 
@@ -61,7 +58,7 @@ The planned replication flow is:
 4. If the root hash differs, the follower diffs the two trees and skips every subtree whose hash matches.
 5. The follower requests the contents it doesn't have, then applies the creates, replacements, renames and deletes.
 
-The tree will be sent as JSON with hex-encoded hashes, and file contents will be sent separately.
+Trees are sent as JSON with hex-encoded hashes, and file contents will be sent separately.
 
 ## Limitations
 
