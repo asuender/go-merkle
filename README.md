@@ -8,6 +8,9 @@ One leader serves the files in its working directory, and followers copy them in
 
 This is a learning project, inspired by Ben Dicken's [video on Merkle trees](https://www.youtube.com/watch?v=86Elcm_6X_Y).
 
+Development mainly happens on the `dev` branch, which will be merged into `main` regularly and once changes to
+the codebase are considered "stable".
+
 ## Build
 
 Requires Go 1.27.1 or later.
@@ -33,16 +36,19 @@ go-merkle follow --host 127.0.0.1 --port 8000
 | `lead`   | `--ignore`        | none        | Pattern of paths to ignore, repeatable       |
 | `lead`   | `--interval`      | `10s`       | How often the snapshot is rebuilt            |
 | `lead`   | `--max-staleness` | `1m`        | How long rebuilds may keep failing           |
+| `lead`   | `--token` | none        | Token to be provided by followers to get access |
 | `follow` | `--host`          | `127.0.0.1` | Leader host                                  |
 | `follow` | `--port`          | `8000`      | Leader port                                  |
+| `follow`   | `--token` | none        | Token sent to the leader as Bearer token |
 
 `--ignore` can be repeated to pass multiple patterns (e.g. `--ignore '*.tmp' --ignore '/build/'`). They follow the [gitignore](https://git-scm.com/docs/gitignore#_pattern_format) syntax relative to the replicated directory. A pattern without a slash matches a name at any depth, those with a leading slash are anchored to the root. **Note**: A trailing `/**` only matches content _inside_ a directory, which means that `abc/**` would replicate an _empty_ directory.
 
 `--interval` takes a Go duration such as `500ms`, `30s` or `1m`, and must be positive.
 The wait starts after each rebuild finishes, so rebuilds never overlap.
 
-`--max-staleness` makes the leader exit once no rebuild has succeeded for that long, so a supervisor can restart it instead of followers silently receiving outdated files.
-It is checked after each failed rebuild, so the actual exit happens up to one interval later. `0` disables it.
+`--max-staleness` makes the leader exit once no rebuild has succeeded for that long, so a supervisor can restart it instead of followers silently receiving outdated files. It is checked after each failed rebuild, so the actual exit happens up to one interval later. `0` disables it.
+
+`--token` lets you set a token that followers must provide in their requests as HTTP Bearer tokens. Allowed characters are letters, digits, -._~+/ and trailing =, as defined in [RFC 6750 section 2.1](https://datatracker.ietf.org/doc/html/rfc6750#section-2.1).
 
 ## How it works
 
@@ -67,6 +73,8 @@ The planned replication flow is:
 - Symlinks are replicated as links and never followed. Links with an absolute target or one pointing outside the replicated directory are skipped. A link to an ignored file is kept and will dangle on the follower.
 - A snapshot holds the contents of every file in memory.
 - Followers must start in an empty directory.
+- Tokens are sent over plain HTTP, since TLS isn't supported yet, so anyone on the network path can read them.
+- Tokens passed with `--token` are visible to other local users through `ps`.
 
 ## License
 

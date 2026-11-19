@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -371,6 +372,12 @@ func TestLeaderConfigValidate(t *testing.T) {
 		{name: "zero interval", cfg: LeaderConfig{}, wantErr: true},
 		{name: "negative interval", cfg: LeaderConfig{Interval: -time.Second}, wantErr: true},
 		{name: "negative staleness", cfg: LeaderConfig{Interval: time.Second, MaxStaleness: -time.Second}, wantErr: true},
+		{name: "token", cfg: LeaderConfig{Interval: time.Second, Token: "aB3-._~+/"}},
+		{name: "token with padding", cfg: LeaderConfig{Interval: time.Second, Token: "dG9rZW4=="}},
+		{name: "token with space", cfg: LeaderConfig{Interval: time.Second, Token: "two words"}, wantErr: true},
+		{name: "token with invalid char", cfg: LeaderConfig{Interval: time.Second, Token: "tok!en"}, wantErr: true},
+		{name: "token with inner padding", cfg: LeaderConfig{Interval: time.Second, Token: "ab=cd"}, wantErr: true},
+		{name: "token of only padding", cfg: LeaderConfig{Interval: time.Second, Token: "=="}, wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -379,5 +386,139 @@ func TestLeaderConfigValidate(t *testing.T) {
 				t.Fatalf("got error %v, want error: %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// serveAuthenticated sends a request with the given Authorization header
+// values through requireBearer and reports whether it reached the handler.
+func serveAuthenticated(token string, authorization ...string) (rec *httptest.ResponseRecorder, reached bool) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/tree", nil)
+	for _, v := range authorization {
+		req.Header.Add("Authorization", v)
+	}
+	rec = httptest.NewRecorder()
+	requireBearer(token, next).ServeHTTP(rec, req)
+	return rec, reached
+}
+
+var authParam = regexp.MustCompile(`^([A-Za-z0-9_-]+)="([^"]*)"$`)
+
+// parseChallenge splits a single challenge into its scheme and auth params.
+// Params must be comma-separated (RFC 9110 section 11.2), so a challenge
+// like `Bearer realm="a" error="b"` fails instead of passing as one param.
+// Quoted values containing commas are not supported, which is fine as long
+// as the leader sends no error_description.
+func parseChallenge(challenge string) (scheme string, params map[string]string, err error) {
+	scheme, rest, _ := strings.Cut(challenge, " ")
+	params = make(map[string]string)
+	if strings.TrimSpace(rest) == "" {
+		return scheme, params, nil
+	}
+
+	for p := range strings.SplitSeq(rest, ",") {
+		m := authParam.FindStringSubmatch(strings.TrimSpace(p))
+		if m == nil {
+			return "", nil, fmt.Errorf("malformed auth param %q", p)
+		}
+		name := strings.ToLower(m[1])
+		if _, dup := params[name]; dup {
+			return "", nil, fmt.Errorf("duplicate auth param %q", name)
+		}
+		params[name] = m[2]
+	}
+	return scheme, params, nil
+}
+
+func TestRequireBearer(t *testing.T) {
+	const token = "s3cr3t-T0ken=="
+
+	tests := []struct {
+		name          string
+		authorization []string
+		wantStatus    int
+		// wantError is the expected error attribute of the challenge.
+		// Empty means the attribute must be absent.
+		wantError string
+	}{
+		{name: "valid token", authorization: []string{"Bearer " + token}, wantStatus: http.StatusOK},
+		// Auth schemes are case-insensitive (RFC 9110 section 11.1).
+		{name: "lowercase scheme", authorization: []string{"bearer " + token}, wantStatus: http.StatusOK},
+		{name: "uppercase scheme", authorization: []string{"BEARER " + token}, wantStatus: http.StatusOK},
+		// RFC 6750 section 3.1: no error code when no credentials were sent.
+		{name: "missing header", wantStatus: http.StatusUnauthorized},
+		{name: "other scheme", authorization: []string{"Basic dXNlcjpwYXNz"}, wantStatus: http.StatusUnauthorized},
+		{name: "wrong token", authorization: []string{"Bearer wrong"}, wantStatus: http.StatusUnauthorized, wantError: "invalid_token"},
+		{name: "token prefix", authorization: []string{"Bearer " + token[:4]}, wantStatus: http.StatusUnauthorized, wantError: "invalid_token"},
+		// Unlike the scheme, the token is opaque and compared byte for byte.
+		{name: "token case differs", authorization: []string{"Bearer " + strings.ToUpper(token)}, wantStatus: http.StatusUnauthorized, wantError: "invalid_token"},
+		{name: "scheme without token", authorization: []string{"Bearer"}, wantStatus: http.StatusBadRequest, wantError: "invalid_request"},
+		{name: "scheme with empty token", authorization: []string{"Bearer "}, wantStatus: http.StatusBadRequest, wantError: "invalid_request"},
+		{name: "token outside b64token grammar", authorization: []string{"Bearer two words"}, wantStatus: http.StatusBadRequest, wantError: "invalid_request"},
+		{name: "multiple headers", authorization: []string{"Bearer " + token, "Bearer " + token}, wantStatus: http.StatusBadRequest, wantError: "invalid_request"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec, reached := serveAuthenticated(token, tt.authorization...)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("got status %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if wantReached := tt.wantStatus == http.StatusOK; reached != wantReached {
+				t.Fatalf("got handler reached %v, want %v", reached, wantReached)
+			}
+			if tt.wantStatus == http.StatusOK {
+				return
+			}
+
+			challenge := rec.Header().Get("WWW-Authenticate")
+			scheme, params, err := parseChallenge(challenge)
+			if err != nil {
+				t.Fatalf("parsing WWW-Authenticate %q: %v", challenge, err)
+			}
+			// RFC 9110 section 11.6.1 requires the challenge on every 401,
+			// and RFC 6750 section 3 also sends it along with 400 and 403.
+			if !strings.EqualFold(scheme, "Bearer") {
+				t.Fatalf("got WWW-Authenticate %q, want a Bearer challenge", challenge)
+			}
+			if got, ok := params["error"]; ok != (tt.wantError != "") || got != tt.wantError {
+				t.Fatalf("got WWW-Authenticate %q, want error attribute %q", challenge, tt.wantError)
+			}
+		})
+	}
+}
+
+func TestRequireBearerAllowsAnyRequestWithEmptyToken(t *testing.T) {
+	tests := []struct {
+		name          string
+		authorization []string
+	}{
+		{name: "missing header"},
+		{name: "some token", authorization: []string{"Bearer whatever"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec, reached := serveAuthenticated("", tt.authorization...)
+			if !reached || rec.Code != http.StatusOK {
+				t.Fatalf("got status %d and handler reached %v, want %d and true", rec.Code, reached, http.StatusOK)
+			}
+		})
+	}
+}
+
+// Shared caches may store responses to requests carrying Authorization only
+// if the response says public (RFC 9111 section 3.5), which would hand blobs
+// to clients without a token.
+func TestHandleBlobForbidsSharedCaching(t *testing.T) {
+	l := newTestLeader(t, fstest.MapFS{"a.txt": &fstest.MapFile{Data: []byte("one")}})
+
+	rec := getBlob(l, child(t, l.snapshot.Load().root, "a.txt").Hash)
+	if hasDirective(rec, "public") || !hasDirective(rec, "private") {
+		t.Fatalf("got Cache-Control %q, want private and not public", rec.Header().Get("Cache-Control"))
 	}
 }

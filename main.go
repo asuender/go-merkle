@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -14,6 +15,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -39,6 +42,15 @@ Examples:
   go-merkle lead --port 8000 --interval 30s
   go-merkle follow --host 127.0.0.1 --port 8000`
 
+// b64token is the token grammar of RFC 6750 section 2.1. Despite the name,
+// tokens are opaque and never decoded.
+var b64token = regexp.MustCompile(`^[A-Za-z0-9\-._~+/]+=*$`)
+
+// isB64Token checks whether s is a valid b64token string.
+func isB64Token(s string) bool {
+	return b64token.MatchString(s)
+}
+
 // LeaderConfig configures [RunLeader].
 type LeaderConfig struct {
 	// Port 0 lets the OS pick a free port.
@@ -51,6 +63,9 @@ type LeaderConfig struct {
 	// MaxStaleness is how long rebuilds may keep failing before the leader
 	// exits. 0 disables this, so the leader keeps serving its last snapshot.
 	MaxStaleness time.Duration
+	// Token is a b64token (RFC 6750) string that followers must send
+	// to get access to the data. Leaving it empty disables auth.
+	Token string
 }
 
 func (cfg LeaderConfig) validate() error {
@@ -60,6 +75,10 @@ func (cfg LeaderConfig) validate() error {
 	if cfg.MaxStaleness < 0 {
 		return fmt.Errorf("expected non-negative max staleness, got %v", cfg.MaxStaleness)
 	}
+	if cfg.Token != "" && !isB64Token(cfg.Token) {
+		return errors.New("expected valid b64token-like token")
+	}
+
 	return nil
 }
 
@@ -67,6 +86,8 @@ func (cfg LeaderConfig) validate() error {
 type FollowerConfig struct {
 	Host string
 	Port int
+	// Token is sent as "Authorization: Bearer <token>" on every request.
+	Token string
 }
 
 type leader struct {
@@ -74,6 +95,61 @@ type leader struct {
 	// after Store, so handlers can read it without locking.
 	// Other approaches like using [sync.RWMutex] are also valid.
 	snapshot atomic.Pointer[Snapshot]
+}
+
+// challenge rejects the request with a Bearer challenge (RFC 6750 section 3).
+// An empty errCode leaves out the error attribute, which section 3.1 requires
+// when the request had no credentials at all.
+func challenge(w http.ResponseWriter, status int, errCode, msg string) {
+	header := "Bearer realm=\"go-merkle\""
+	if errCode != "" {
+		header = fmt.Sprintf("%s, error=\"%s\"", header, errCode)
+	}
+
+	w.Header().Set("WWW-Authenticate", header)
+	http.Error(w, msg, status)
+}
+
+func requireBearer(token string, next http.Handler) http.Handler {
+	if token == "" {
+		return next
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		header := r.Header["Authorization"]
+		// Per RFC 6750 §3.1: don't add an error code when no credentials were sent, e.g.
+		// because the follower was unaware that authentication is necessary.
+		if len(header) == 0 {
+			challenge(w, http.StatusUnauthorized, "", "no token provided")
+			return
+		}
+
+		scheme, credentials, found := strings.Cut(header[0], " ")
+		if len(header) > 1 || !found {
+			challenge(w, http.StatusBadRequest, "invalid_request", "wrong authorization header format")
+			return
+		}
+
+		if !strings.EqualFold(scheme, "Bearer") {
+			challenge(w, http.StatusUnauthorized, "", "wrong authorization scheme")
+			return
+		}
+
+		if !isB64Token(credentials) {
+			challenge(w, http.StatusBadRequest, "invalid_request", "malformed token")
+			return
+		}
+
+		// A plain comparison returns at the first mismatching byte, so response
+		// times would let an attacker guess the token byte by byte. The length
+		// still leaks, which is fine since it's not secret.
+		if subtle.ConstantTimeCompare([]byte(token), []byte(credentials)) == 0 {
+			challenge(w, http.StatusUnauthorized, "invalid_token", "wrong token")
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (l *leader) handleTree(w http.ResponseWriter, r *http.Request) {
@@ -123,7 +199,10 @@ func (l *leader) handleBlob(w http.ResponseWriter, r *http.Request) {
 	// Blobs are immutable content, which means that the slightest change
 	// of the data on disk will produce a new one; these semantics
 	// make a good candidate for using "Cache-Control: immutable".
-	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	// Shared caches may store responses to authenticated requests if they
+	// say public (RFC 9111 section 3.5), which would leak blobs to clients
+	// without a token. Followers cache privately anyway, so private costs nothing.
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
 	w.Write(blob)
 }
 
@@ -132,6 +211,10 @@ func (l *leader) handleBlob(w http.ResponseWriter, r *http.Request) {
 func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, cfg LeaderConfig) error {
 	if err := cfg.validate(); err != nil {
 		return err
+	}
+
+	if cfg.Token != "" {
+		logger.Println("bearer authentication enabled")
 	}
 
 	// We build the snapshot before starting the server
@@ -155,7 +238,7 @@ func RunLeader(ctx context.Context, fsys fs.FS, logger *log.Logger, cfg LeaderCo
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Port),
-		Handler: mux,
+		Handler: requireBearer(cfg.Token, mux),
 	}
 
 	// If any errors occur while inside [http.Serve], the main approaches
@@ -247,11 +330,13 @@ func main() {
 	})
 	leaderCmd.DurationVar(&leaderCfg.Interval, "interval", DefaultInterval, "How often the leader rebuilds its snapshot (e.g. 500ms, 30s, 1m).")
 	leaderCmd.DurationVar(&leaderCfg.MaxStaleness, "max-staleness", DefaultMaxStaleness, "How long rebuilds may fail before exiting (e.g. 500ms, 30s, 1m). 0 disables this.")
+	leaderCmd.StringVar(&leaderCfg.Token, "token", "", "Token to be required from followers to access the data. Empty disables authentication.")
 
 	var followerCfg FollowerConfig
 	followerCmd := flag.NewFlagSet("follow", flag.ExitOnError)
 	followerCmd.StringVar(&followerCfg.Host, "host", DefaultHost, "The host the follower receives updates from.")
 	followerCmd.IntVar(&followerCfg.Port, "port", DefaultPort, "The port the follower receives updates from.")
+	followerCmd.StringVar(&followerCfg.Token, "token", "", "Token to be passed to every request to the leader. Empty means no authentication.")
 
 	if len(os.Args) < 2 {
 		fmt.Println("expected `lead` or `follow` subcommand.")
