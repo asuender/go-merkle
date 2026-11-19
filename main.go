@@ -29,7 +29,9 @@ const (
 	DefaultMaxStaleness = time.Minute
 )
 
-const usage = `go-merkle - single-leader file replication based on Merkle trees
+// usage is built from the Default* constants so the help page can't drift
+// from the actual flag defaults.
+var usage = fmt.Sprintf(`go-merkle - single-leader file replication based on Merkle trees
 
 Usage:
   go-merkle <command> [flags]
@@ -37,10 +39,23 @@ Usage:
 Commands:
   lead      Serve the current directory to followers
   follow    Replicate a leader's files into the current (empty) directory
+  help      Show this help page
+
+Flags for lead:
+  --port <port>              Port to serve updates on (default %[2]d)
+  --ignore <pattern>         Exclude matching paths from snapshots (repeatable)
+  --interval <duration>      How often to rebuild the snapshot, e.g. 500ms, 30s, 1m (default %[3]v)
+  --max-staleness <duration> How long rebuilds may fail before exiting; 0 disables this (default %[4]v)
+  --token <token>            Token followers must send; empty disables authentication
+
+Flags for follow:
+  --host <host>              Host of the leader (default %[1]s)
+  --port <port>              Port of the leader (default %[2]d)
+  --token <token>            Token sent to the leader on every request; empty means no authentication
 
 Examples:
-  go-merkle lead --port 8000 --interval 30s
-  go-merkle follow --host 127.0.0.1 --port 8000`
+  go-merkle lead --port 8000 --interval 30s --ignore '*.tmp'
+  go-merkle follow --host 127.0.0.1 --port 8000`, DefaultHost, DefaultPort, DefaultInterval, DefaultMaxStaleness)
 
 // b64token is the token grammar of RFC 6750 section 2.1. Despite the name,
 // tokens are opaque and never decoded.
@@ -351,6 +366,10 @@ func main() {
 	context.AfterFunc(ctx, stop)
 
 	switch os.Args[1] {
+	case "help":
+		fmt.Println(usage)
+		os.Exit(0)
+
 	case "lead":
 		leaderCmd.Parse(os.Args[2:])
 		logger := log.New(os.Stderr, "leader: ", 0)
