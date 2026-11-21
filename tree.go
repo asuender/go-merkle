@@ -219,10 +219,7 @@ func (n *FileNode) Flatten() []*FileNode {
 		node := stack[last]
 		stack = stack[:last]
 
-		for _, c := range node.Children {
-			stack = append(stack, c)
-		}
-
+		stack = append(stack, node.Children...)
 		result = append(result, node)
 	}
 
